@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Модели RPG — просмотр</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #9cc4e4; overflow: hidden; font: 12px/1.2 Georgia, serif; }
+  #lbl div { position: absolute; transform: translate(-50%, 0); color: #fff; background: rgba(0,0,0,.55); padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
+  #info { position: absolute; left: 6px; top: 6px; color: #fff; background: rgba(0,0,0,.5); padding: 4px 6px; border-radius: 4px; }
+</style>
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.js", "three/addons/": "/addons/" } }</script>
+</head>
+<body>
+<div id="lbl"></div><div id="info"></div>
+<script type="module">
+import * as THREE from 'three';
+import * as MD from '/rpg/models.js';
+
+// Наборы для просмотра: ?set=humans | actions | animals | build1 | build2 | build3 | amphi | ships | small | nature | poi1 | poi2 | trade | dungeon | glad
+const params = new URLSearchParams(location.search);
+const SET = params.get('set') || 'humans';
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(SET === 'dungeon' ? 0x1a1814 : 0x9cc4e4);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 2000);
+scene.add(new THREE.HemisphereLight(0xdfefff, 0x8a7a5a, SET === 'dungeon' ? 0.35 : 1.1));
+const sun = new THREE.DirectionalLight(0xfff2dc, SET === 'dungeon' ? 0.5 : 2.4);
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.MeshStandardMaterial({ color: SET === 'ships' ? 0x2d7f9a : 0xb8a676, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+if (SET === 'ships') ground.position.y = -0.02;
+
+// окружение как в игре (иначе металлы выглядят чёрными)
+{
+  const envScene = new THREE.Scene();
+  const sg = new THREE.SphereGeometry(10, 32, 16); const cols = []; const pa = sg.attributes.position;
+  for (let i = 0; i < pa.count; i++) { const k = Math.max(0, pa.getY(i) / 10); const c = new THREE.Color(0xb8a888).lerp(new THREE.Color(0x8ab8e8), Math.min(1, k * 2 + 0.3)); cols.push(c.r, c.g, c.b); }
+  sg.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  envScene.add(new THREE.Mesh(sg, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(envScene, 0.02).texture; scene.environmentIntensity = 0.4;
+}
+const items = [];   // { obj, name, x, z, tris }
+const tri = (o) => { let n = 0; o.traverseVisible((c) => { if (c.isMesh && c.geometry) { const g = c.geometry; const t = (g.index ? g.index.count : g.attributes.position.count) / 3; n += t * (c.isInstancedMesh ? c.count : 1); } }); return Math.round(n); };
+function place(obj, name, x, z, ry = 0) { obj.position.x += x; obj.position.z += z; obj.rotation.y += ry; scene.add(obj); items.push({ obj, name, x, z, tris: tri(obj) }); return obj; }
+function grid(list, cols, dx, dz, ry = 0) { list.forEach(([name, mk], i) => { let o; try { o = mk(); } catch (e) { console.error('model ' + name + ': ' + e.stack); return; } place(o, name, (i % cols - (cols - 1) / 2) * dx, Math.floor(i / cols) * dz, ry); }); }
+const H = (gear, hopts = {}, anim = null) => () => {
+  const h = MD.makeHuman({ tunic: 0x9e2a22, skin: 0xd2a07a, hair: 0x3b2a1a, beard: true, ...hopts });
+  MD.setGear(h, gear);
+  const s = { speed: 0, ...(anim || {}) };
+  for (let i = 0; i < (anim && anim.frames || 30); i++) MD.animateHuman(h, 1 / 30, { ...s, t: i / 30 });
+  return h;
+};
+const A = (type, speed, frames = 37, extra = {}) => () => { const a = MD.makeAnimal(type); for (let i = 0; i < frames; i++) MD.animateAnimal(a, 1 / 30, { t: i / 30, speed, ...extra }); return a; };
+const LEG = { weapon: 'gladius', offhand: 'scutum', head: 'galea_iron', body: 'segmentata', legs: 'caligae' };
+
+let camPos = new THREE.Vector3(0, 6, 12), camLook = new THREE.Vector3(0, 1, 0);
+switch (SET) {
+  case 'humans': {
+    grid([
+      ['legionary', H(LEG)],
+      ['centurion q3', H({ weapon: 'spatha', offhand: 'scutum', head: 'galea_centurio', body: 'segmentata', legs: 'ocreae', q: 3 })],
+      ['barb chief', H({ weapon: 'axe', offhand: 'barbshield', head: 'horns', body: 'chief' }, { tunic: 0x5a6a3a, hair: 0xb07a3a })],
+      ['barb spear', H({ weapon: 'hasta', offhand: 'barbshield', body: 'fur' }, { tunic: 0x6a5a3a, hair: 0x8a5a2a })],
+      ['punic officer', H({ weapon: 'falcata', offhand: 'punicshield', head: 'punichelm_gold', body: 'punic_gold', q: 3 }, { tunic: 0x4a2a6a, skin: 0xb88a62 })],
+      ['punic inf', H({ weapon: 'hasta', offhand: 'punicshield', head: 'punichelm', body: 'punic' }, { tunic: 0xe8e0c8, skin: 0xb88a62 })],
+      ['iberian', H({ weapon: 'falcata', offhand: 'caetra', body: 'iberian' }, { tunic: 0xf0ece0 })],
+      ['robber boss', H({ weapon: 'khopesh', offhand: 'parma', head: 'nemes', body: 'robber_boss' }, { tunic: 0xe8e0cc, skin: 0xa87a52, beard: false })],
+      ['murmillo', H({ weapon: 'gladius', offhand: 'scutum', head: 'murmillo', body: 'glad' })],
+      ['retiarius', H({ weapon: 'trident', body: 'glad' }, { beard: false })],
+      ['thraex', H({ weapon: 'sica', offhand: 'parma', head: 'thraex', body: 'glad' })],
+      ['pirate', H({ weapon: 'falx', body: 'pirate' }, { tunic: 0x7a6a4a })],
+      ['slinger', H({ weapon: 'sling', body: 'tunic_punic' }, { tunic: 0xd8c8a8 })],
+      ['robber', H({ weapon: 'knife', body: 'robber' }, { tunic: 0xa89878 })],
+      ['woman torch', H({ weapon: 'torch' }, { female: true, beard: false, tunic: 0x2a5a9e, hair: 0x6a3a1a, cape: 0x8a6a3a })],
+      ['colonist hamata', H({ weapon: 'pick', head: 'pileus', body: 'hamata', legs: 'ocreae_iron' }, { tunic: 0x3a7a32 })],
+      ['squamata', H({ weapon: 'hasta', head: 'galea_bronze', body: 'squamata' }, { tunic: 0xb8642a })],
+      ['punic_mail', H({ weapon: 'rudis', body: 'punic_mail', head: 'galea_bronze' }, { cape: 0x9e2a22 })],
+    ], 6, 1.6, 2.6);
+    camPos.set(0, 6.5, 13.5); camLook.set(0, 0.9, 2.6);
+    break;
+  }
+  case 'actions': {
+    grid([
+      ['walk 1.4', H(LEG, {}, { speed: 1.4, frames: 23 })],
+      ['walk 5.2', H({ weapon: 'gladius' }, {}, { speed: 5.2, frames: 17 })],
+      ['run 8.6', H({ weapon: 'hasta' }, {}, { speed: 8.6, running: true, frames: 19 })],
+      ['blade c0 .3', H({ weapon: 'gladius', offhand: 'scutum' }, {}, { attack: { kind: 'blade', p: 0.3, combo: 0 } })],
+      ['blade c0 .5', H({ weapon: 'gladius', offhand: 'scutum' }, {}, { attack: { kind: 'blade', p: 0.5, combo: 0 } })],
+      ['blade c1 .5', H({ weapon: 'spatha' }, {}, { attack: { kind: 'blade', p: 0.5, combo: 1 } })],
+      ['thrust .5', H({ weapon: 'gladius' }, {}, { attack: { kind: 'blade', p: 0.5, combo: 2 } })],
+      ['axe .38', H({ weapon: 'axe' }, {}, { attack: { kind: 'axe', p: 0.38 } })],
+      ['axe .55', H({ weapon: 'axe' }, {}, { attack: { kind: 'axe', p: 0.55 } })],
+      ['spear .52', H({ weapon: 'hasta' }, {}, { attack: { kind: 'spear', p: 0.52 } })],
+      ['bow draw', H({ weapon: 'bow', body: 'fur' }, {}, { attack: { kind: 'bow', p: 0.55 } })],
+      ['throw .4', H({ weapon: 'pilum' }, {}, { attack: { kind: 'throw', p: 0.4 } })],
+      ['block shield', H(LEG, {}, { block: true })],
+      ['block sword', H({ weapon: 'spatha' }, {}, { block: true })],
+      ['tool .4', H({ weapon: 'pick' }, {}, { attack: { kind: 'tool', p: 0.4 } })],
+      ['fishing', H({ weapon: 'rod_pro' }, {}, { fishing: true })],
+      ['fist .34', H({}, {}, { attack: { kind: 'fist', p: 0.34 } })],
+      ['knife .36', H({ weapon: 'knife' }, {}, { attack: { kind: 'knife', p: 0.36 } })],
+      ['dodge .5', H({ weapon: 'gladius' }, {}, { dodge: 0.45 })],
+      ['swim', H({}, {}, { swim: true, frames: 60 })],
+      ['sit/row', H({}, {}, { sit: true, row: true, frames: 40 })],
+      ['dead', H({ weapon: 'gladius' }, {}, { dead: 1, frames: 40 })],
+      ['hit', H(LEG, {}, { hit: 0.5 })],
+      ['carry', H({}, {}, { carry: true })],
+    ], 8, 1.8, 3.0);
+    camPos.set(0, 7.5, 16); camLook.set(0, 0.6, 3.0);
+    break;
+  }
+  case 'closeup': {
+    const which = params.get('n') || '0';
+    const sets = {
+      0: [['legionary', H(LEG)], ['barb chief', H({ weapon: 'axe', offhand: 'barbshield', head: 'horns', body: 'chief' }, { tunic: 0x5a6a3a, hair: 0xb07a3a })], ['punic officer', H({ weapon: 'falcata', offhand: 'punicshield', head: 'punichelm_gold', body: 'punic_gold', q: 3 }, { tunic: 0x4a2a6a, skin: 0xb88a62 })], ['retiarius', H({ weapon: 'trident', body: 'glad' }, { beard: false })], ['woman torch', H({ weapon: 'torch' }, { female: true, beard: false, tunic: 0x2a5a9e, hair: 0x6a3a1a, cape: 0x8a6a3a })]],
+      1: [['blade c0 .3', H({ weapon: 'gladius', offhand: 'scutum' }, {}, { attack: { kind: 'blade', p: 0.3, combo: 0 } })], ['blade c0 .48', H({ weapon: 'gladius', offhand: 'scutum' }, {}, { attack: { kind: 'blade', p: 0.48, combo: 0 } })], ['blade c1 .48', H({ weapon: 'spatha' }, {}, { attack: { kind: 'blade', p: 0.48, combo: 1 } })], ['thrust .5', H({ weapon: 'gladius' }, {}, { attack: { kind: 'blade', p: 0.5, combo: 2 } })], ['axe .55', H({ weapon: 'axe' }, {}, { attack: { kind: 'axe', p: 0.55 } })]],
+      2: [['spear .52', H({ weapon: 'hasta' }, {}, { attack: { kind: 'spear', p: 0.52 } })], ['bow draw', H({ weapon: 'bow', body: 'fur' }, {}, { attack: { kind: 'bow', p: 0.55 } })], ['throw .4', H({ weapon: 'pilum' }, {}, { attack: { kind: 'throw', p: 0.4 } })], ['fishing', H({ weapon: 'rod_pro' }, {}, { fishing: true })], ['block shield', H(LEG, {}, { block: true })]],
+      3: [['walk 1.4', H(LEG, {}, { speed: 1.4, frames: 23 })], ['walk 5.2', H({ weapon: 'gladius' }, {}, { speed: 5.2, frames: 17 })], ['run 8.6', H({ weapon: 'hasta' }, {}, { speed: 8.6, running: true, frames: 19 })], ['swim', H({}, {}, { swim: true, frames: 60 })], ['dead', H({ weapon: 'gladius' }, {}, { dead: 1, frames: 40 })]],
+    };
+    grid(sets[which], 5, 1.5, 0, +(params.get('ry') || 0));
+    camPos.set(+(params.get('cx') || 0), 1.6, 5.2); camLook.set(0, 1.0, 0);
+    break;
+  }
+  case 'zoo': {
+    const n = params.get('n') || '0';
+    const L = n === '0' ? [['deer walk', A('deer', 1.5)], ['deer gallop', A('deer', 8, 14)], ['goat trot', A('goat', 2.5)], ['boar', A('boar', 3)], ['wolf bound', A('wolf', 7.5, 11)], ['jackal', A('jackal', 2)]]
+      : n === '1' ? [['bear', A('bear', 1.5)], ['bear attack', A('bear', 0, 10, { attack: 0.5 })], ['lion', A('lion', 4)], ['horse trot', A('horse', 3.5)]]
+      : [['croc', A('croc', 1.2)], ['snake', A('snake', 1.0)], ['cobra strike', A('snake', 0, 10, { attack: 0.45 })], ['elephant', A('elephant', 2)], ['wolf dead', A('wolf', 0, 30, { dead: 1 })]];
+    const dx = n === '2' ? 5 : 3.2;
+    grid(L, L.length, dx, 0, +(params.get('ry') || Math.PI / 2));
+    camPos.set(0, n === '2' ? 3.5 : 2.2, n === '2' ? 15 : 9.5); camLook.set(0, 0.8, 0);
+    break;
+  }
+  case 'look': {
+    const mk = [];
+    for (const k of (params.get('b') || '').split(',').filter(Boolean)) mk.push([k, () => MD.makeBuilding(k, { level: 2 })]);
+    for (const k of (params.get('p') || '').split(',').filter(Boolean)) mk.push([k, () => MD.makePOI(k)]);
+    for (const k of (params.get('a') || '').split(',').filter(Boolean)) mk.push([k, A(k, +(params.get('sp') || 0), 25)]);
+    let x = 0;
+    mk.forEach(([name, f]) => { const o = f(); const b = new THREE.Box3().setFromObject(o); const w = b.max.x - b.min.x; place(o, name, x - b.min.x, 0, +(params.get('ry') || 0)); x += w + 2; });
+    items.forEach((it) => { it.obj.position.x -= x / 2; it.x -= x / 2; });
+    const bb0 = new THREE.Box3(); items.forEach((it) => bb0.expandByObject(it.obj));
+    const c0 = bb0.getCenter(new THREE.Vector3()), s0 = bb0.getSize(new THREE.Vector3());
+    const dist = Math.max(s0.x * 0.75, s0.z * 1.3, s0.y * 1.6) + 3;
+    const el = +(params.get('el') || 0.75);
+    camLook.copy(c0).setY(s0.y * 0.25); camPos.set(c0.x, c0.y + dist * Math.sin(el), c0.z + dist * Math.cos(el));
+    break;
+  }
+  case 'animals': {
+    grid([
+      ['deer walk', A('deer', 1.5)], ['deer gallop', A('deer', 8, 14)], ['goat trot', A('goat', 2.5)], ['boar', A('boar', 3)],
+      ['wolf bound', A('wolf', 7.5, 11)], ['jackal', A('jackal', 2)], ['bear', A('bear', 1.5)], ['bear attack', A('bear', 0, 10, { attack: 0.5 })],
+      ['lion', A('lion', 4)], ['horse trot', A('horse', 3.5)], ['croc', A('croc', 1.2)], ['snake', A('snake', 1.0)],
+      ['cobra strike', A('snake', 0, 10, { attack: 0.45 })], ['elephant', A('elephant', 2)], ['wolf dead', A('wolf', 0, 30, { dead: 1 })], ['boar attack', A('boar', 0, 5, { attack: 0.45 })],
+    ], 4, 4.5, 4.5, -0.6);
+    camPos.set(4, 9, 20); camLook.set(0, 0.6, 6);
+    break;
+  }
+  case 'build1': grid(['forum', 'horreum', 'fabrica', 'ferraria', 'pistrinum', 'macellum'].map((k) => [k, () => MD.makeBuilding(k, { level: 2 })]), 3, 32, 32); camPos.set(0, 60, 82); camLook.set(0, 0, 16); break;
+  case 'build2': grid(['portus', 'castra', 'thermae', 'taberna', 'templum', 'turris', 'murus', 'pharos'].map((k) => [k, () => MD.makeBuilding(k)]), 4, 30, 32); camPos.set(0, 58, 80); camLook.set(0, 0, 14); break;
+  case 'build3': grid(['domus', 'farm', 'olivetum', 'vinea', 'lumber', 'figlina', 'fishery', 'pecus', 'linarium', 'colonia'].map((k) => [k, () => MD.makeBuilding(k)]), 5, 21, 22); camPos.set(0, 42, 58); camLook.set(0, 0, 10); break;
+  case 'amphi': place(MD.makeBuilding('amphitheatrum'), 'amphitheatrum', 0, 0); camPos.set(55, 60, 75); camLook.set(0, 0, 0); break;
+  case 'scaffold': grid([0, 0.25, 0.5, 0.8].map((p) => ['forum ' + p, () => MD.makeScaffold('forum', 12, p)]).concat([['domus .5', () => MD.makeScaffold('domus', 6, 0.5)]]), 5, 22, 22); camPos.set(0, 28, 42); camLook.set(0, 0, 0); break;
+  case 'ships': grid(['scapha', 'corbita', 'liburna', 'trireme', 'pirate_ship', 'punic_ship'].map((k) => [k, () => { const s = MD.makeShip(k); MD.animateShip(s, 1.3, 4); return s; }]), 3, 14, 32, -0.5); camPos.set(-10, 26, 58); camLook.set(0, 0, 14); break;
+  case 'small': {
+    const keys = ['crate', 'chest', 'wreck', 'ornate'];
+    grid(keys.map((k) => [k, () => MD.makeChest(k)]).concat(keys.map((k) => [k + ' open', () => { const c = MD.makeChest(k); c.userData.lid.rotation.x = -1.2; return c; }])), 8, 1.6, 0);
+    const drops = ['gladius', 'spatha', 'axe', 'hasta', 'bow', 'khopesh', 'falcata', 'rudis', 'pick', 'rod', 'torch', 'knife', 'parma', 'scutum', 'galea_bronze', 'galea_iron', 'galea_centurio', 'pileus', 'subarmalis', 'hamata', 'squamata', 'segmentata', 'punic_mail', 'caligae', 'ocreae', 'ocreae_iron',
+      'wood', 'stone', 'clay', 'hide', 'meat', 'wheat', 'olives', 'grapes', 'iron_ore', 'marble', 'murex', 'silver_ore', 'cedar', 'papyrus', 'linen', 'plank', 'brick', 'iron', 'silver', 'purple', 'leather', 'bread', 'oil', 'wine', 'amphora', 'arrow', 'pilum', 'bandage', 'gem', 'gold', 'artifact', 'denarii', 'f_tuna', 'f_octopus'];
+    drops.forEach((k, i) => { let o; try { o = MD.makeItemDrop(k); } catch (e) { console.error('drop ' + k + ': ' + e.stack); return; } place(o, k, (i % 12 - 5.5) * 1.35, 1.8 + Math.floor(i / 12) * 1.35); });
+    camPos.set(0, 9, 13.5); camLook.set(0, 0, 3.6);
+    break;
+  }
+  case 'nature': {
+    grid(['olive', 'cypress', 'pine', 'oak', 'palm', 'cedar', 'dead'].map((k) => [k, () => MD.makeTree(k)]), 7, 5, 0);
+    grid(['med', 'dry', 'papyrus', 'reed'].map((k) => ['bush ' + k, () => MD.makeBush(k)]).concat(['stone', 'iron', 'marble', 'silver', 'clay'].map((k) => ['node ' + k, () => MD.makeRockNode(k)])).concat([['grass', () => MD.makeGrassTuft()], ['rock', () => MD.makeRock(1)]]), 11, 2.8, 0);
+    items.slice(7).forEach((it) => { it.obj.position.z += 7; it.z += 7; });
+    const fish = ['sardine', 'mackerel', 'seabass', 'dentex', 'octopus', 'grouper', 'moray', 'tuna', 'swordfish', 'sturgeon'];
+    fish.forEach((k, i) => { const f = MD.makeFish(k); f.position.set((i % 5 - 2) * 3, 0.6, 11 + Math.floor(i / 5) * 2.2); f.rotation.y = Math.PI / 2; place(f, k, 0, 0); });
+    const sc = MD.makeFishSchool(); sc.position.set(9, 1.6, 12); MD.animateFishSchool(sc, 2.0); place(sc, 'school', 0, 0);
+    camPos.set(0, 11, 26); camLook.set(0, 1.2, 7);
+    break;
+  }
+  case 'poi1': grid(['start_camp', 'barb_camp', 'pyramid', 'obelisk', 'sphinx', 'ruin', 'shipwreck', 'cave_entrance', 'mine_entrance'].map((k) => [k, () => MD.makePOI(k)]), 3, 38, 36); camPos.set(0, 62, 100); camLook.set(0, 0, 30); break;
+  case 'poi2': grid(['tomb_entrance', 'fortress_gate', 'scribe_hut', 'colony_site', 'dock', 'well', 'statue', 'punic_fort'].map((k) => [k, () => MD.makePOI(k)]), 4, 30, 40); camPos.set(0, 70, 105); camLook.set(0, 0, 26); break;
+  case 'trade': {
+    // торговля: гильдия, фактория с причалом, ящики 1..4, скалы в море, квадрирема, плавающий ящик (?n=0 общий вид, 1 ящики, 2 здания, 3 море)
+    const n = params.get('n') || '0';
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(400, 200), new THREE.MeshStandardMaterial({ color: 0x2d7f9a, roughness: 0.2, metalness: 0.1 }));
+    water.rotation.x = -Math.PI / 2; water.position.set(0, 0.01, 100); water.receiveShadow = true; scene.add(water);
+    const safe = (name, f) => { try { return f(); } catch (e) { console.error('model ' + name + ': ' + e.stack); return new THREE.Group(); } };
+    const crates = () => { [1, 2, 3, 4].forEach((k) => place(safe('crate', () => MD.makeTradeCrate(k)), 'crate ' + k, -3.6 + k * 1.2, -1.2)); [1, 2, 3, 4].forEach((k) => place(safe('float', () => MD.makeFloatingCrate(k)), 'float ' + k, -4.2 + k * 1.8, 2.5)); };
+    const quad = () => { const s = safe('quad', () => MD.makeShip('quadrireme')); MD.animateShip(s, 1.3, 4); return s; };
+    if (n === '1') { crates(); camPos.set(0, 3.2, 6.5); camLook.set(0, 0.2, 0.6); }
+    else if (n === '2') { place(safe('collegium', () => MD.makeBuilding('collegium')), 'collegium', -14, -12); place(safe('trader', () => MD.makePOI('trader')), 'trader', 14, 0); camPos.set(0, 26, 38); camLook.set(0, 0, -2); }
+    else if (n === '3') { place(safe('sea_rock', () => MD.makePOI('sea_rock')), 'sea_rock', -16, 30); place(safe('sea_wreck', () => MD.makePOI('sea_wreck')), 'sea_wreck', 12, 30); place(quad(), 'quadrireme', 0, 58, -1.2); camPos.set(0, 30, 92); camLook.set(0, 0, 36); }
+    else if (n === '4') { const s = quad(); s.userData.catapultArm.rotation.x = +(params.get('arm') || s.userData.catapultRest); place(s, 'quadrireme', 0, 0); camPos.set(-5.5, 4.6, -4.5); camLook.set(0, 2.2, -8.6); }
+    else {
+      place(safe('collegium', () => MD.makeBuilding('collegium')), 'collegium', -30, -14);
+      place(safe('trader', () => MD.makePOI('trader')), 'trader', -4, 0);
+      [1, 2, 3, 4].forEach((k) => place(safe('crate', () => MD.makeTradeCrate(k)), 'crate ' + k, -14 + k * 1.3, 2.0));
+      place(safe('float', () => MD.makeFloatingCrate(3)), 'float 3', -10, 8);
+      place(quad(), 'quadrireme', 18, 14, -0.4);
+      place(safe('sea_rock', () => MD.makePOI('sea_rock')), 'sea_rock', -22, 40);
+      place(safe('sea_wreck', () => MD.makePOI('sea_wreck')), 'sea_wreck', 8, 46);
+      camPos.set(-6, 55, 95); camLook.set(-4, 0, 16);
+    }
+    break;
+  }
+  case 'glad': {   // школа гладиаторов, зверинец, сдающиеся на коленях (n=1 — крупно люди)
+    const n = params.get('n') || '0';
+    const KN = [
+      ['barbarian kneel', H({ weapon: 'axe', offhand: 'barbshield', body: 'fur' }, { tunic: 0x6a5a3a, hair: 0x8a5a2a }, { kneel: true, frames: 60 })],
+      ['legionary kneel', H(LEG, {}, { kneel: true, frames: 60 })],
+      ['gladiator kneel', H({ weapon: 'gladius', body: 'glad', head: 'murmillo', offhand: 'scutum' }, {}, { kneel: true, frames: 60 })],
+      ['unarmed kneel', H({}, { tunic: 0x8a7a5a }, { kneel: true, frames: 60 })],
+      ['kneel→stand', H({ weapon: 'gladius' }, {}, { kneel: true, frames: 6 })],
+    ];
+    if (n === '1') {
+      grid(KN, 5, 1.9, 0, +(params.get('ry') || 0.5));
+      camPos.set(+(params.get('cx') || 0), 2.2, 9.5); camLook.set(0, 0.5, 0);
+    } else if (n === '2' || n === '3') {   // крупные планы: клетка со львом / портик с кельями
+      const v = n === '2';
+      place(MD.makeBuilding(v ? 'vivarium' : 'ludus'), v ? 'vivarium' : 'ludus', 0, 0);
+      if (v) { camPos.set(1.5, 2.6, 2.2); camLook.set(-0.2, 0.5, -4.4); } else { camPos.set(3, 3.2, 3.5); camLook.set(-1, 2.2, -4.5); }
+      if (params.get('cam')) camPos.set(...params.get('cam').split(',').map(Number));
+      if (params.get('at')) camLook.set(...params.get('at').split(',').map(Number));
+    } else {
+      place(MD.makeBuilding('ludus'), 'ludus', -10, 0);
+      place(MD.makeBuilding('vivarium'), 'vivarium', 10, 0);
+      grid(KN.slice(0, 3), 3, 1.6, 0); items.slice(-3).forEach((it) => { it.obj.position.z += 11; it.z += 11; });
+      camPos.set(0, 24, 34); camLook.set(0, 0, 1);
+    }
+    break;
+  }
+  case 'city': place(MD.makePOI('port_city'), 'port_city', 0, 0); camPos.set(0, 50, 170); camLook.set(0, 10, -20); break;
+  case 'dungeon': {
+    const th = ['cave', 'mine', 'tomb', 'fortress'];
+    th.forEach((t, i) => { const r = MD.makeDungeonRoom(t, 14, 12, ['s', 'e']); place(r, 'room ' + t, (i % 2 - 0.5) * 22, Math.floor(i / 2) * 20); });
+    th.forEach((t, i) => { const c = MD.makeDungeonCorridor(t, 10); place(c, 'corr ' + t, 24 + i * 7, 10); });
+    camPos.set(10, 40, 46); camLook.set(6, 0, 10);
+    break;
+  }
+}
+// виртуальные источники → настоящие точечные лампы (не больше 16)
+let nl = 0;
+for (const v of MD.VLIGHTS) { let r = v; while (r.parent) r = r.parent; if (r !== scene || nl >= 16) continue; const l = new THREE.PointLight(v.color, v.intensity * (SET === 'dungeon' ? 1.2 : 0.6), v.distance, v.decay); v.add(l); nl++; }
+// тень от солнца под набор
+const bb = new THREE.Box3(); items.forEach((it) => bb.expandByObject(it.obj));
+const c = bb.getCenter(new THREE.Vector3()), sz = bb.getSize(new THREE.Vector3()).length();
+sun.position.set(c.x + sz * 0.4, sz * 0.8 + 10, c.z + sz * 0.5); sun.target.position.copy(c);
+const sc = sun.shadow.camera; sc.left = sc.bottom = -sz * 0.6; sc.right = sc.top = sz * 0.6; sc.near = 1; sc.far = sz * 3 + 50; sc.updateProjectionMatrix();
+camera.position.copy(camPos); camera.lookAt(camLook);
+renderer.render(scene, camera);
+// подписи
+const lbl = document.getElementById('lbl'); const v = new THREE.Vector3();
+for (const it of items) { v.set(it.obj.position.x, 0, it.obj.position.z).project(camera); const d = document.createElement('div'); d.textContent = `${it.name} · ${it.tris}`; d.style.left = ((v.x + 1) / 2 * innerWidth) + 'px'; d.style.top = ((1 - v.y) / 2 * innerHeight + 4) + 'px'; lbl.appendChild(d); }
+document.getElementById('info').textContent = `${SET}: ${items.length} моделей, кадр: ${renderer.info.render.triangles} треуг., ${renderer.info.render.calls} вызовов`;
+window.__tris = items.map((it) => ({ name: it.name, tris: it.tris }));
+window.__done = true;
+</script>
+</body>
+</html>

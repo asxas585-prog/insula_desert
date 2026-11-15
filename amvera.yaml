@@ -1,0 +1,12 @@
+# Настройки для хостинга Amvera (https://amvera.ru)
+# npm install выполняется автоматически при сборке
+meta:
+  environment: node
+  toolchain:
+    name: npm
+    version: 18
+run:
+  command: node server.js
+  containerPort: 3000
+  # постоянное хранилище: здесь сохраняются мир RPG и персонажи (rpg-world.json, rpg-chars.json)
+  persistenceMount: /data
