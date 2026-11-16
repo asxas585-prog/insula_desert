@@ -1,3 +1,4 @@
+import * as TN from './tuna.js';
 import { formationWorld, horseMotion } from './rules.js';
 // Insula Deserta: Империя — клиент
 import * as R from './render.js';
@@ -100,11 +101,13 @@ function makeHumanFor(seed, look, color, faction) {
 function lookKey(l) { return JSON.stringify(l); }
 function applyLook(o, l) {
   if (o.userData._crate) { o.remove(o.userData._crate); o.userData._crate = null; }
+  if(o.userData._tuna){o.remove(o.userData._tuna);o.userData._tuna=null;}
+  if(l.tuna){const f=MD.makeFish('tuna');f.rotation.z=Math.PI/2;f.position.set(0,1,.45);f.scale.setScalar(.85);o.add(f);o.userData._tuna=f;}
   if (l.carry) { // ящик в руках: перед грудью, оружие убрано
     let cr; try { cr = MD.makeTradeCrate(l.carry); } catch { cr = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.6), MD.M(0x9a7a4a)); }
     cr.position.set(0, 0.72, 0.42); o.add(cr); o.userData._crate = cr; o.userData._carry = true;
   } else o.userData._carry = false;
-  MD.setGear(o, { weapon: l.carry ? null : l.weapon ? l.weapon[0] : null, q: l.weapon ? l.weapon[1] : 0, offhand: l.offhand ? l.offhand[0] : null, head: l.head ? l.head[0] : null, body: l.body ? l.body[0] : null, legs: l.legs ? l.legs[0] : null, torch: !!l.torch });
+  MD.setGear(o, { weapon: l.carry || l.tuna ? null : l.weapon ? l.weapon[0] : null, q: l.weapon ? l.weapon[1] : 0, offhand: l.offhand ? l.offhand[0] : null, head: l.head ? l.head[0] : null, body: l.body ? l.body[0] : null, legs: l.legs ? l.legs[0] : null, torch: !!l.torch });
 }
 const ATK_DUR = { blade: 0.6, knife: 0.42, axe: 0.95, spear: 0.72, bow: 0.85, throw: 0.9, tool: 0.85, fist: 0.45, rod: 1.0, torch: 0.6, trident: 0.72 };
 const wKind = (k) => (k && GEAR[k] ? GEAR[k].kind : k === 'falx' || k === 'sica' || k === 'falcata' || k === 'khopesh' ? 'blade' : k === 'sling' ? 'throw' : k === 'trident' ? 'trident' : 'fist');
@@ -166,7 +169,7 @@ function onMsg(m) {
     case 's': onState(m); break;
     case 'char': S.char = m.c; UI.syncTp(m.c.tpLeft); UI.onChar(); break;
     case 'world': S.world = m; for (const e of m.events || []) if (e.left != null) e._end = performance.now() / 1000 + e.left; syncGates(); UI.onWorld(); syncSuburbs(); break;
-    case 'blds': S.blds = m.list; syncGuildFootprints(); if (S.started) syncBuildings(); UI.onBlds(); break;
+    case 'blds': S.blds = m.list; WG.setCityRoadCells(S.blds); syncGuildFootprints(); if (S.started) syncBuildings(); UI.onBlds(); break;
     case 'roster': S.roster = new Map(m.list.map((q) => [q.id, q])); for (const [id, o] of players) if (!S.roster.has(id)) { scene.remove(o.obj); players.delete(id); } UI.syncPvp(); for (const [id, o] of players) { const q = S.roster.get(id); if (o.lbl && q && o.lbl.userData.pvp !== !!q.pvp) { o.lbl.userData.pvp = !!q.pvp; if (o.lbl.material && o.lbl.material.color) o.lbl.material.color.set(q.pvp ? 0xff7060 : 0xffffff); } } break;
     case 'log': UI.addLog(esc(m.text), m.kind); break;
     case 'loot': UI.lootToast(m.text, m.k, m.q); SND.play('pickup'); break;
@@ -624,6 +627,7 @@ function syncBoardDecks(list) {
   for (const d of list || []) if (d.plank) { const m = new THREE.Mesh(new THREE.BoxGeometry(d.hw * 2, 0.18, d.hl * 2), MD.M(0x8a6a44)); m.position.set(d.x, d.y - 0.1, d.z); m.rotation.y = d.ry; scene.add(m); bdMeshes.push(m); }
 }
 function onState(s) {
+  TN.syncTuna(s.tuna,ships);
   if (s.wa && S.world) S.world.war = s.wa;
   syncBoardDecks(s.bd);
   S.st = s; S.serverT = s.t; S.timeAt = performance.now() / 1000; lastStateAt = performance.now();
@@ -874,6 +878,7 @@ addEventListener('keydown', (e) => {
   const k = e.code;
   keys[k] = true;
   if (e.repeat) return; // автоповтор клавиши не должен сбрасывать удержание E и переключать окна
+  if(k==='KeyH'&&!UI.anyModal()&&TN.toggleHarpoon()){e.preventDefault();return;}
   if (UI.handleKey(k, e)) { e.preventDefault(); return; }
   if (UI.anyModal()) return;
   if (k === 'KeyR' && S.placing && S.placing.bt && !S.placing.claim && !S.placing.demolish) { const pl = S.placing; pl.ry += pl.cellSnap || pl.bt === 'via_turn' || pl.bt === 'via_cross' ? Math.PI / 2 : BUILDINGS[pl.bt].road ? Math.PI / 8 : Math.PI / 4; pl.turned = true; return; } // R — повернуть здание при стройке и переносе
@@ -904,6 +909,7 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseL =
 function aimYaw() { return camYaw + Math.PI; }
 function onLeftClick() {
   if (UI.anyModal()) return;
+  if(TN.fireHarpoon())return;
   if (S.placing) { UI.confirmPlacing(); return; }
   if (!S.me.alive || !S.char) return;
   const w = S.char.gear.weapon && GEAR[S.char.gear.weapon.k];
@@ -913,7 +919,7 @@ function onLeftClick() {
     myAtk = { kind: 'rod', t: performance.now() / 1000, combo: 0 };
     return;
   }
-  if (S.char.carry) return; // руки заняты ящиком
+  if (S.char.carry || S.char.tunaCarry) return; // руки заняты ящиком
   if (S.ship && (!w || w.kind !== 'bow')) { // с палубы — абордаж, если рядом вражеский корабль
     const so = ships.get(S.ship); if (!so) return;
     if (![...eships.values()].some((e) => Math.hypot(e.obj.position.x - so.obj.position.x, e.obj.position.z - so.obj.position.z) < 16 + SHIPS[so.type].len / 2)) return;
@@ -1142,6 +1148,7 @@ function updateMe(dt) {
     if (myAtk && t - myAtk.t < 0.4 && !myAtk.gather) speed *= 0.4;
     if (c.bagW > c.bagMax) speed *= 0.6;
     if (c.carry) speed *= 0.8;
+    if(c.tunaCarry)speed*=.55;
     if (c.mounted && c.horseOut && !swim) { speed = 1; }
     else if (onRoad(me.x, me.z) || WG.onRoadNet(me.x, me.z)) speed *= 1.25;
   }
@@ -1252,6 +1259,7 @@ function ensureMe() {
   const c = S.char; if (!c) return;
   const look = {}; for (const s of ['weapon', 'offhand', 'head', 'body', 'legs']) look[s] = c.gear[s] ? [c.gear[s].k, c.gear[s].q] : null;
   if (c.torch) look.torch = 1;
+  if(c.tunaCarry)look.tuna=c.tunaCarry.kg;
   if (c.carry) look.carry = D.CRATES[c.carry] ? D.CRATES[c.carry].grade : 1;
   const key = lookKey(look) + c.color;
   if (me3 && key === meLook) return;
@@ -1279,7 +1287,7 @@ function loop() {
     const w = S.char && S.char.gear.weapon ? GEAR[S.char.gear.weapon.k] : null;
     const ak = myAtk && t - myAtk.t < (ATK_DUR[myAtk.kind] || 0.6) ? { kind: myAtk.kind === 'tool' ? 'tool' : myAtk.kind, p: (t - myAtk.t) / (ATK_DUR[myAtk.kind] || 0.6), combo: myAtk.combo } : null;
     const dodge = t - dodgeT < CFG.dodgeTime ? (t - dodgeT) / CFG.dodgeTime : -1;
-    animHuman(me3, dt, t, { t, speed: seatY != null ? 0 : moveSpeed, running: me.run && seatY == null, swim: me.swim && !ship, dodge, attack: ak, block: blocking, dead: me.alive ? 0 : Math.min(1, (t - (S.deadAt || t)) / 1), sit: (!!ship && (ship.type === 'scapha' || ship.type === 'barca')) || !!S.spect, ride: seatY != null, row: false, fishing: !!fishing, hit: Math.max(0, 1 - (t - myHitT) * 4), carry: !!me3.userData._carry });
+    animHuman(me3, dt, t, { t, speed: seatY != null ? 0 : moveSpeed, running: me.run && seatY == null, swim: me.swim && !ship, dodge, attack: ak, block: blocking, dead: me.alive ? 0 : Math.min(1, (t - (S.deadAt || t)) / 1), sit: (!!ship && ship.type === 'scapha') || !!S.spect, ride: seatY != null, row: false, fishing: !!fishing, hit: Math.max(0, 1 - (t - myHitT) * 4), carry: !!me3.userData._carry });
     if (!me.alive && !S.deadAt) S.deadAt = t; if (me.alive) S.deadAt = 0;
   }
   // другие игроки
@@ -1295,7 +1303,7 @@ function loop() {
     const oSeat = updateHorse('p' + o.id, inf && inf.horse, !!(inf && inf.mounted), o.x, o.z, o.ry, o.sp, !!(inf && inf.horse) && !onShip && !o.inst && o.obj.visible && !!(fl & 1), dt, t, o.jh);
     const oT = !onShip && !o.inst ? towerAt(o.x, o.z) : null; o.obj.position.set(o.x, onShip ? 0.9 : o.inst ? (S.inst ? S.inst.y0 : 60) : oSeat != null ? oSeat : oT ? oT.y : bodyY(o.x, o.z) + o.jh, o.z); o.obj.rotation.y = o.ry;
     const at = o.at ? { kind: o.at[0], p: Math.min(1, o.at[1] / (ATK_DUR[o.at[0]] || 0.6) + 0.05), combo: o.at[2] } : null;
-    animHuman(o.obj, dt, t, { t, speed: onShip || oSeat != null ? 0 : o.sp, ride: oSeat != null, running: !!(fl & 2), swim: !!(fl & 8) && !onShip, dodge: fl & 16 ? ((t * 2.2) % 1) : -1, attack: at && at.p < 1 ? at : null, block: !!(fl & 4), dead: fl & 1 ? 0 : 1, sit: (!!onShip && (onShip.type === 'scapha' || onShip.type === 'barca')) || (!onShip && (o.jh || 0) > 2.5 && !oT && (fl & 1) && o.sp < 0.3), fishing: !!(fl & 32), hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0, carry: !!o.obj.userData._carry });
+    animHuman(o.obj, dt, t, { t, speed: onShip || oSeat != null ? 0 : o.sp, ride: oSeat != null, running: !!(fl & 2), swim: !!(fl & 8) && !onShip, dodge: fl & 16 ? ((t * 2.2) % 1) : -1, attack: at && at.p < 1 ? at : null, block: !!(fl & 4), dead: fl & 1 ? 0 : 1, sit: (!!onShip && onShip.type === 'scapha') || (!onShip && (o.jh || 0) > 2.5 && !oT && (fl & 1) && o.sp < 0.3), fishing: !!(fl & 32), hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0, carry: !!o.obj.userData._carry });
     setHp(o.bar, (o.hpp || 0) / 100); o.bar.visible = o.hpp < 100;
     o.bar.quaternion.copy(camera.quaternion);
     if (o.lbl) o.lbl.visible = true; fitLabel(o.lbl, o.bar, o.obj.position, 90);
@@ -1651,6 +1659,7 @@ function updateDestination() { const target=S.navTarget;destinationLabel.visible
 
 function syncGuildFootprints() {
   if(!S.W)return;
-  for(const C of S.W.cities){const b=S.blds.find(b=>b.type==='collegium'&&b.muni&&b.city===C.id),l=C.layout.find(l=>l.type==='collegium');if(b&&l){l.x=b.x;l.z=b.z;l.ry=b.ry;}}
+  for(const C of S.W.cities)for(const l of C.layout){if(l.type==='stall')continue;const b=S.blds.find(b=>b.type===l.type&&b.muni&&b.city===C.id);if(b){l.x=b.x;l.z=b.z;l.ry=b.ry;}}
+  for(const C of S.W.cities)WG.extendCivicAvenues(C);
   WG.setMuniFootprints(S.W.cities);
 }

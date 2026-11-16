@@ -75,7 +75,7 @@ export function floatText(x, y, z, text, color = '#fff', big = false) {
 }
 export function hurtFlash() { const h = $('hurt'); h.style.transition = 'none'; h.style.opacity = '1'; requestAnimationFrame(() => { h.style.transition = 'opacity 0.6s'; h.style.opacity = '0'; }); }
 export function levelUp(m) { toast(`⭐ Уровень ${m.level}! Очков характеристик: ${m.points} (C — персонаж)`, true); }
-export function questDone(m) { toast(`✔ Задание выполнено: ${m.title}`, true); addLog(`Награда: ${m.reward.den} ден., ${m.reward.xp} опыта, ${m.reward.dig} достоинства`, 'good'); }
+export function questDone(m) { toast(`✔ Задание выполнено: ${m.title}`, true); addLog(`Награда: ${m.reward.den} ден., ${m.reward.xp} опыта, ${m.reward.dig} достоинства, ${m.reward.office||0} очков должности (${esc(m.cityName||m.city||'Мессана')})`, 'good'); }
 export function showDead(m) { $('deadBox').classList.remove('hidden'); $('deadText').textContent = `${m.by ? 'Вас сразил(а): ' + m.by + '. ' : ''}Потеряно ${m.lost} денариев. Возрождение через ${m.t} с…`; }
 export function hideDead() { $('deadBox').classList.add('hidden'); }
 export function setPrompt(t) { setHTML($('prompt'), esc(t)); }
@@ -130,7 +130,7 @@ function toggle(kind) { if (cur && cur.kind === kind) closeModal(); else open(ki
 // ---------- Модальное окно ----------
 let cur = null; // {kind, tab, id}
 export const anyModal = () => !!cur;
-export function closeModal() { cur = null; $('modal').classList.add('hidden'); }
+export function closeModal() { cur = null; $('modal').classList.add('hidden');if($('modal').contains(document.activeElement))document.activeElement.blur(); }
 function open(kind, opts = {}) {
   cur = { kind, tab: opts.tab || null, id: opts.id ?? null, key: opts.key ?? null };
   $('modal').classList.remove('hidden'); $('modal').classList.toggle('big', kind === 'build');
@@ -254,6 +254,7 @@ $('mbody').addEventListener('click', (e) => {
     case 'permit': net({ type: 'permit', city: d.city, d: d.d, n: Number(($('pm_' + d.d) || {}).value) || 1 }); break;
     case 'release': net({ type: 'release', city: d.city }); break;
     case 'claimMode': startClaim(d.city); break;
+    case 'roadMode': startClaim(d.city);S.placing.cityRoad=true;S.placing.n=1;addLog('Эдил: ЛКМ — улица 4×4 м; продолжайте от главной дороги. Esc — выйти.','info');break;
     case 'colonyUp': net({ type: 'colonyUp', bid: Number(d.bid), i: Number(d.i) }); break;
     case 'guardOrd': net({ type: 'guardOrder', mode: d.m, bid: d.bid ? Number(d.bid) : null }); break;
     case 'guardFire': if (confirm('Рассчитать телохранителя?')) net({ type: 'guardFire' }); break;
@@ -262,6 +263,8 @@ $('mbody').addEventListener('click', (e) => {
     case 'squadOut': case 'squadIn': case 'squadDisband': net({ type: d.a, id: Number(d.id) }); break;
     case 'squadOrd': net({ type: 'squadOrder', id: Number(d.id), mode: d.m }); break;
     case 'squadForm': net({ type: 'squadOrder', id: Number(d.id), form: d.f }); break;
+    case 'tunaUnload':case 'tunaLoad':net({type:d.a,sid:Number(d.sid),slot:Number(d.slot)});break;
+    case 'tunaSell':net({type:d.a,bid:Number(d.bid)});break;
     case 'guardHire': case 'guardToggle': net({ type: d.a }); break;
     case 'guide': open('guide'); break;
     case 'guideTarget': C.markDestination(Number(d.x), Number(d.z), d.label); closeModal(); break;
@@ -514,8 +517,9 @@ function renderInv() {
     const cells = ents.map(([k, n]) => slotHtml('r:' + k, hasIcon(k) ? icon(k) : `<span style="font-size:22px">${RES[k]?.icon || '?'}</span>`, Math.floor(n), 0, `${RES[k]?.name || k} ×${Math.floor(n)} · ${Math.round((RES[k]?.w || 0) * n * 10) / 10} кг`, sel === 'r:' + k)).join('') + '<div class="slot empty"></div>'.repeat(Math.max(0, 30 - ents.length));
     let det = '<div class="muted">Выберите предмет в ячейке.</div>';
     if (sel && sel.startsWith('r:')) { const k = sel.slice(2), n = Math.floor(c.bag[k] || 0); if (n > 0) det = `<div class="itemName">${resName(k)} ×${n}</div><div class="muted">вес ${Math.round((RES[k]?.w || 0) * n * 10) / 10} кг · цена ~${RES[k]?.p || 0} ден./шт.</div><div class="acts">${RES[k] && RES[k].food ? `<button class="btn sm good" data-a="eat" data-res="${k}">Съесть</button>` : ''}${k === 'wheat' && c.horseOut ? '<button class="btn sm" data-a="horseFeedA">Покормить коня</button>' : ''}<button class="btn sm alt" data-a="dropRes" data-res="${k}" data-n="1">Выбросить 1</button><button class="btn sm alt" data-a="dropRes" data-res="${k}" data-n="${n}">Выбросить все</button></div>`; }
+    const tunaCarry=c.tunaCarry?`<div class="card"><b>В руках: тунец ${c.tunaCarry.kg} кг</b><p>Отнесите в гавань → Рыбный причал, либо верните на свободный борт баркаса через G → Корабль.</p></div>`:'';
     const carry = c.carry ? `<div class="card"><div class="t">В руках: 📦 ${crateName(c.carry)}</div><div class="muted">X — поставить на землю. E у корабля — погрузить. Продаётся торговцам.</div></div>` : '';
-    setHTML($('mbody'), `<div class="card"><div class="stat"><span>Нагрузка</span><span>${c.bagW} / ${c.bagMax} кг${c.bagW > c.bagMax ? ' — перегруз!' : ''}</span></div><div class="prog"><div style="width:${Math.min(100, c.bagW / c.bagMax * 100)}%"></div></div><div class="stat"><span>Денарии</span><span>${c.den}</span></div><div class="stat"><span>Обрывки папируса · лоскуты чертежа</span><span>${c.scraps}/5 · ${c.quadScraps || 0}/4</span></div></div>${carry}<div class="invgrid">${cells}</div><div class="invdet">${det}</div><div class="muted" style="margin-top:8px">Y — съесть самое подходящее. Еда: ${food.map((k) => RES[k].name).join(', ') || 'нет'}.</div>`);
+    setHTML($('mbody'), `<div class="card"><div class="stat"><span>Нагрузка</span><span>${c.bagW} / ${c.bagMax} кг${c.bagW > c.bagMax ? ' — перегруз!' : ''}</span></div><div class="prog"><div style="width:${Math.min(100, c.bagW / c.bagMax * 100)}%"></div></div><div class="stat"><span>Денарии</span><span>${c.den}</span></div><div class="stat"><span>Обрывки папируса · лоскуты чертежа</span><span>${c.scraps}/5 · ${c.quadScraps || 0}/4</span></div></div>${carry}${tunaCarry}<div class="invgrid">${cells}</div><div class="invdet">${det}</div><div class="muted" style="margin-top:8px">Y — съесть самое подходящее. Еда: ${food.map((k) => RES[k].name).join(', ') || 'нет'}.</div>`);
   }
 }
 function gearStats(it) { const g = GEAR[it.k]; if (!g) return ''; const m = QUALITY[it.q || 0].mul; if (g.slot === 'weapon') return g.kind === 'rod' ? 'рыбалка' : `урон ${Math.round(g.dmg * m)}`; if (g.slot === 'offhand') return `блок ${Math.round(g.block * 100)}%, броня ${Math.round(g.armor * m)}`; return `броня ${Math.round(g.armor * m)}`; }
@@ -571,7 +575,7 @@ function renderJournal() {
     const list = STORY.map((s, i) => `<div class="card" style="${i === w.story ? 'border-color:var(--gold)' : i > w.story ? 'opacity:.45' : ''}"><div class="t">${i < w.story ? '✔' : i === w.story ? '▶' : '•'} Глава ${i + 1}. ${s.title}</div>${i <= w.story ? `<div>${s.text}</div><div class="muted">Награда всем колонистам: ${s.reward.den} ден., ${s.reward.xp} опыта, ${s.reward.dig} достоинства</div>` : ''}</div>`).join('');
     setHTML($('mbody'), list);
   } else if (cur.tab === 'quests') {
-    setHTML($('mbody'), (c.quests.map((q) => `<div class="card"><div class="t">${q.title}</div><div class="muted">${q.desc}</div><div class="prog"><div style="width:${q.got / q.n * 100}%"></div></div><div class="row" style="border:0;padding:4px 0"><span class="grow muted">${q.got}/${q.n} · награда ${q.reward.den} ден., ${q.reward.xp} опыта</span><button class="btn sm alt" data-a="questDrop" data-id="${q.id}">Отказаться</button></div></div>`).join('') || '<div class="muted">Нет заданий. Их берут на Форуме, в Таверне или в лагере колонистов.</div>'));
+    setHTML($('mbody'), (c.quests.map((q) => `<div class="card"><div class="t">${q.title}</div><div class="muted">${q.desc}</div><div class="prog"><div style="width:${q.got / q.n * 100}%"></div></div><div class="row" style="border:0;padding:4px 0"><span class="grow muted">${q.got}/${q.n} · награда ${q.reward.den} ден., ${q.reward.xp} опыта, ${q.reward.office||5} очк. должности</span><button class="btn sm alt" data-a="questDrop" data-id="${q.id}">Отказаться</button></div></div>`).join('') || '<div class="muted">Нет заданий. Их берут на Форуме, в Таверне или в лагере колонистов.</div>'));
   } else if (cur.tab === 'world') {
     const ev = (w.events || []).map((e) => { const I = D.EVENT_INFO[e.kind === 'raid' ? e.foe : e.kind]; return `<div class="card evc" title="${I ? esc(`${I.what}\nЧто делать: ${I.todo}\nНаграда: ${I.reward}`) : ''}"><div class="t">${I ? I.icon + ' ' : ''}${e.title}</div><div class="muted">${e.text}${(e._end ? e._end - performance.now() / 1000 : e.left) > 0 ? ` · ${e.kind === 'raid' ? 'набег закончится через' : 'осталось'} ${fmtT(e._end ? e._end - performance.now() / 1000 : e.left)}` : ''}</div>${I ? `<div class="evmore"><div>${I.what}</div><div><b>Что делать:</b> ${I.todo}</div><div><b>Награда:</b> ${I.reward}</div></div>` : ''}</div>`; }).join('') || '<div class="muted">Сейчас спокойно. Все возможные события — во вкладке «Возможные события».</div>';
     const rq = (w.requests || []).map((r) => `<div class="card"><div class="t">🦅 Рим просит: ${resName(r.res)} — ${r.got}/${r.n}</div><div class="muted">Осталось ${fmtT(r.left)}. Сдавать на Форуме.</div></div>`).join('');
@@ -672,6 +676,7 @@ function demolishTarget(g) {
 export function confirmPlacing() {
   const p = S.placing; if (!p || !p.pos) return;
   if (p.demolish) { if (p.target) net({ type: 'demolish', bid: p.target.id }); return; }
+  if(p.claim&&p.cityRoad){if(p.blk)net({type:'cityRoad',city:p.claim,i:p.blk.i0,j:p.blk.j0});return;}
   if (p.claim) { if (p.blk) net({ type: 'claim', city: p.claim, i0: p.blk.i0, j0: p.blk.j0, w: p.n, h: p.n }); return; }
   if (p.move) { net({ type: 'moveBld', bid: p.move, x: p.pos.x, z: p.pos.z, ry: p.ry }); cancelPlacing(); return; }
   net({ type: 'place', bt: p.bt, x: p.pos.x, z: p.pos.z, ry: p.ry });
@@ -682,9 +687,11 @@ function updatePlacing() {
   const p = S.placing; if (!p) return;
   const g = C.groundPointAtMouse(); if (!g) return;
   if (p.claim) {
+    if(p.cityRoad)p.n=1;
     const Cy = WG.cityById(p.claim); const bs = WG.blockSnap(Cy, g.x, g.z, p.n); p.blk = bs; p.pos = g;
-    const k = bs.i0 + ':' + bs.j0 + ':' + p.n + ':' + Object.keys(S.world.plots || {}).length + ':' + JSON.stringify(S.char.permits || {});
-    if (k !== p.key) { p.key = k; drawCells(p.obj, Cy, bs.i0, bs.j0, p.n, p.n, (i, j) => claimColor(Cy, i, j)); }
+    const k = bs.i0 + ':' + bs.j0 + ':' + p.n + ':' + Object.keys(S.world.plots || {}).length + ':' + JSON.stringify(S.char.permits || {})+':'+S.blds.length;
+    if (k !== p.key) { p.key = k; drawCells(p.obj, Cy, bs.i0, bs.j0, p.n, p.n, (i,j)=>p.cityRoad?(WG.cityRoadAllowed(Cy,i,j,S.blds,S.world.plots||{})?0x6aff6a:0xff4a3a):claimColor(Cy,i,j)); }
+    if(p.cityRoad){setPrompt('Улица 4×4 м · камень ×'+BUILDINGS.via_cell.cost.stone+' · ЛКМ — проложить · Esc — выйти');return;}
     let cost = 0; for (let i = bs.i0; i < bs.i0 + p.n; i++) for (let j = bs.j0; j < bs.j0 + p.n; j++) if (!(S.world.plots || {})[`${Cy.id}:${i}:${j}`] && WG.cellFree(Cy, i, j)) cost += WG.cellPrice(Cy, i, j) || 0;
     const [ci, cj] = WG.cellOf(Cy, g.x, g.z), one = WG.cellPrice(Cy, ci, cj);
     setPrompt(`Участок ${p.n}×${p.n} · ≈${cost} ден. (клетка под курсором — ${one ?? '—'} ден.) · зелёные — по разрешению, жёлтые — нет разрешения, синие — ваши, красные — нельзя`);
@@ -856,10 +863,10 @@ function stablePanel(b) {
 }
 const progOf = (b) => { const tot = Object.values(b.cost).reduce((a, n) => a + n, 0), got = Object.values(b.prog || {}).reduce((a, n) => a + n, 0); return tot ? got / tot : 0; };
 const repairBtn = (b) => b.hp < b.maxHp ? `<button class="btn sm alt" data-a="repair" data-bid="${b.id}">Подлатать (${b.hp}/${b.maxHp}) · +одобрение Рима</button>${S.char.office && (BUILDINGS[b.type].pub || b.muni) ? ` <button class="btn sm alt" data-a="repair" data-bid="${b.id}" data-store="1">Подлатать со склада</button>` : ''}` : '';
-function questBoard() {
+function questBoard(source='forum',city=B()?.city||S.world.city) {
   const w = S.world, c = S.char;
   const have = new Set(c.quests.map((q) => q.id));
-  return (w.quests || []).map((q) => `<div class="row"><span class="grow"><b>${q.title}</b> <span class="muted">— ${q.desc}</span></span><span class="nm muted" style="font-size:12px">${q.reward.den} ден. · ${q.reward.xp} оп.</span><button class="btn sm" data-a="quest" data-id="${q.id}" ${have.has(q.id) ? 'disabled' : ''}>${have.has(q.id) ? 'Взято' : 'Взять'}</button></div>`).join('');
+  return `<div class="card">Очки должности в этом городе: <b>${c.officePoints?.[city]||0}</b>. Общие задания можно брать нескольким игрокам; прогресс личный. Обновление доски раз в 10 минут.</div>`+(w.quests || []).filter(q=>(q.source||'forum')===source&&(!q.city||q.city===city)).map((q) => `<div class="row"><span class="grow"><b>${q.title}</b> <span class="muted">— ${q.desc}</span></span><span class="nm muted" style="font-size:12px">${q.reward.den} ден. · ${q.reward.xp} оп. · ${q.reward.office||5} очк. должности</span><button class="btn sm" data-a="quest" data-id="${q.id}" ${have.has(q.id)||(c.doneQuests||[]).includes(q.id) ? 'disabled' : ''}>${(c.doneQuests||[]).includes(q.id)?'Выполнено':have.has(q.id)?'Взято':'Взять'}</button></div>`).join('');
 }
 // должность: щелчок — разворачивается полное описание и требования
 const offOpen = new Set();
@@ -884,11 +891,12 @@ function forumPanel(b) {
   } else if (cur.tab === 'elect') {
     const E = w.election;
     h = `<h3>Должностные лица города ${esc(w.cityName || '')} <span class="muted" style="font-size:12px">(в каждом римском городе — свои; щёлкните — откроется описание)</span></h3>${Object.keys(OFFICES).map((k) => offDetails(k, `<b class="nm">${w.offices[k] ? esc(w.offices[k].name) : '—'}</b>`)).join('')}`;
+    h+=`<div class="card">Очки должности в ${esc(w.cityName||w.city)}: <b>${c.officePoints?.[w.city]||0}</b>. Их дают поручения форума и гавани. Очки открывают выдвижение и не расходуются.</div>`;
     if (E) {
       h += `<h3 style="margin-top:12px">Идут выборы · ${fmtT(E.ends)}</h3>` + Object.entries(OFFICES).map(([k, o]) => {
         const cands = Object.entries(E.offices[k] || {});
-        const req = [o.minTrade ? `торговый оборот ${o.minTrade} ден. — сумма ваших сделок на рынке, в лавках, портах и у торговцев (у вас ${(c.stats2 && c.stats2.traded) || 0})` : '', o.minMil ? `военное звание «${D.MIL_RANKS[o.minMil].name}»` : ''].filter(Boolean).join('; ');
-        return `<div class="card"><div class="row" style="border:0"><span class="grow t">${o.icon} ${o.name}${req ? `<div class="muted" style="font-weight:400;font-size:12px">Нужно: ${req}</div>` : ''}</span><button class="btn sm" data-a="cand" data-office="${k}" ${c.rank < o.minRank ? 'disabled title="Нужно звание ' + RANKS[o.minRank].name + '"' : ''}>Выдвинуться</button></div>${cands.map(([cid, x]) => `<div class="row"><span class="grow">${esc(x.name)}</span><span class="nm">${x.votes.toFixed(1)} гол.</span><button class="btn sm ${x.mine ? 'good' : ''}" data-a="vote" data-office="${k}" data-cid="${cid}">${x.mine ? 'Ваш голос' : 'Голосовать'}</button></div>`).join('') || '<div class="muted">Кандидатов нет</div>'}</div>`;
+        const req = [`очки должности в этом городе: ${c.officePoints?.[w.city]||0} / ${o.minOfficePoints}`,o.minTrade ? `торговый оборот ${o.minTrade} ден. — сумма ваших сделок на рынке, в лавках, портах и у торговцев (у вас ${(c.stats2 && c.stats2.traded) || 0})` : '', o.minMil ? `военное звание «${D.MIL_RANKS[o.minMil].name}»` : ''].filter(Boolean).join('; ');
+        return `<div class="card"><div class="row" style="border:0"><span class="grow t">${o.icon} ${o.name}${req ? `<div class="muted" style="font-weight:400;font-size:12px">Нужно: ${req}</div>` : ''}</span><button class="btn sm" data-a="cand" data-office="${k}" ${c.rank < o.minRank || (c.officePoints?.[w.city]||0)<o.minOfficePoints ? 'disabled title="Нужны указанное звание и очки должности этого города"' : ''}>Выдвинуться</button></div>${cands.map(([cid, x]) => `<div class="row"><span class="grow">${esc(x.name)}</span><span class="nm">${x.votes.toFixed(1)} гол.</span><button class="btn sm ${x.mine ? 'good' : ''}" data-a="vote" data-office="${k}" data-cid="${cid}">${x.mine ? 'Ваш голос' : 'Голосовать'}</button></div>`).join('') || '<div class="muted">Кандидатов нет</div>'}</div>`;
       }).join('');
     } else h += `<div class="muted" style="margin-top:10px">Следующие выборы через ${fmtT(w.electionIn)}. Голос весит по званию (и красноречию).</div><button class="btn sm alt" data-a="callElection" style="margin-top:6px">Объявить досрочные выборы</button>`;
     for (const o of c.offs || []) h += ` <button class="btn sm bad" data-a="resign" data-office="${o.city}:${o.k}">Сложить: ${OFFICES[o.k].name} (${esc(o.cityName)})</button>`;
@@ -1027,7 +1035,7 @@ function curiaPanel(b) {
   }
   const rows = Object.entries(D.DISTRICTS).map(([k, d]) => { const have = pm[(C && C.id) + ':' + k] || 0, k2 = (hasOff('aedilis') ? 0.8 : 1) * D.derived(c).buy, pr = Math.max(1, Math.round(d.price * D.PERMIT_K * k2));
     return `<div class="row"><span class="nm" style="width:220px"><span style="color:${d.color}">■</span> ${d.name}</span><span style="width:150px">разрешение ${pr} ден.<br><span class="muted">клетка ${Math.round(d.price * 0.7 * k2)}–${Math.round(d.price * 1.8 * k2)} ден.</span>${d.rare ? '<br><span class="muted">+ ' + Object.entries(d.rare).map(([r, v]) => `${resName(r)} ×${v}`).join(', ') + '</span>' : ''}</span><span class="muted" style="width:120px">от звания «${RANKS[d.rank].name}»</span><span class="muted" style="width:120px">доход и выработка ×${d.mul}</span><span class="grow">${have ? `<b>разрешений: ${have}</b>` : ''}</span><input id="pm_${k}" class="num" value="9"><button class="btn sm" data-a="permit" data-city="${C && C.id}" data-d="${k}" ${c.rank < d.rank ? 'disabled' : ''}>Купить</button></div>`; }).join('');
-  setHTML($('mbody'), `<div class="card"><div class="t">Эдил ${C ? C.name : ''}</div><div class="muted">Город разбит на клетки 4×4 м и на четыре района. Купите у Эдила разрешение на нужное число клеток в районе, затем разметьте участок на месте (кнопка «Разметить» есть и в окне Хозяйства K → «Владения»). Каждая клетка оплачивается при разметке по своей цене: у форума и гавани дороже, на окраине дешевле. В стенах (центр и окраина) — общественные постройки (таверна, баня, кузница, инсула, дом…), при гавани — пристань, верфь, пурпурная ферма, за стенами — сельские (ферма, конюшня, хлев…). Чем дороже район — тем быстрее производство и больше доход хозяина.</div></div>${rows}
+  setHTML($('mbody'), `<div class="card"><div class="t">Эдил ${C ? C.name : ''}</div><div class="muted">Участки 4×4 м жилого квартала находятся в четверти города справа от кардо, со стороны суши (на карте — зелёный район). Кольцо вокруг форума остаётся общественным. Купите у Эдила разрешение на нужное число клеток в районе, затем разметьте участок на месте (кнопка «Разметить» есть и в окне Хозяйства K → «Владения»). Каждая клетка оплачивается при разметке по своей цене: у форума и гавани дороже, на окраине дешевле. В стенах (центр и окраина) — общественные постройки (таверна, баня, кузница, инсула, дом…), при гавани — пристань, верфь, пурпурная ферма, за стенами — сельские (ферма, конюшня, хлев…). Чем дороже район — тем быстрее производство и больше доход хозяина.</div></div>${rows}${hasOff('aedilis')?`<div class="card"><button class="btn" data-a="roadMode" data-city="${C?.id}">🛣 Проложить улицу: 1 клетка</button><p>Камень ×${BUILDINGS.via_cell.cost.stone}. Только свободные клетки, от главной дороги. Занимать купленные участки нельзя.</p></div>`:''}
     <div class="card"><div class="stat"><span>Ваши клетки / разрешения / предел</span><span>${cells} / ${perm} / ${c.cellLimit || '?'}</span></div><div style="margin-top:6px"><button class="btn good" data-a="claimMode" data-city="${C && C.id}" ${perm ? '' : 'disabled'}>📐 Разметить участок</button> <span class="muted">колесо — размер, ЛКМ — разметить, Esc — выход</span></div></div>`);
 }
 function domusPanel(b) {
@@ -1073,10 +1081,12 @@ function arenaPanel(b) {
 }
 function portPanel(b) {
   const c = S.char, w = S.world;
-  tabs([['ships', '⚓ Верфь'], ['mine', '⛵ Мои корабли'], ['catch', '🐟 Рыбный причал'], ...(b.city === 'messana' ? [['ferry', '⛵ Переправа в Регий']] : [])]);
+  tabs([['ships', '⚓ Верфь'], ['mine', '⛵ Мои корабли'], ['catch', '🐟 Рыбный причал'],['q','🗒 Задания гавани'], ...(b.city === 'messana' ? [['ferry', '⛵ Переправа в Регий']] : [])]);
+  if(cur.tab==='q'){setHTML($('mbody'),'<p>Поручения гавани: улов, снабжение и торговля. Отдельная доска, обновление раз в 10 минут.</p>'+questBoard('harbor',b.city));return;}
   if (cur.tab === 'ferry') { setHTML($('mbody'), `<div class="card"><div class="t">Регий и Поле Марса</div><div class="muted">Напротив гавани Мессаны, на Бруттии, — гавань Регия: деревня и дом распорядителя игр. Там бьются армиями — с ботами и с игроками, за военные очки и рейтинг полководцев. По Бруттию просто гулять нельзя: туда приплывают на своём корабле или переправляются здесь.</div><div style="margin-top:8px"><button class="btn good" data-a="ferry" data-to="regium">⛵ Переправиться в Регий (${D.WAR.ferry} ден.)</button></div></div>`); return; }
+  if (cur.tab === 'catch' && c.tunaCarry){setHTML($('mbody'),`<div class="card"><h3>Свежий тунец: ${c.tunaCarry.kg} кг</h3><p>Улов принесён с баркаса. Покупатель платит ${Math.round(c.tunaCarry.kg*.9*D.derived(c).sell)} денариев.</p><button class="btn good" data-a="tunaSell" data-bid="${b.id}" ${S.ship?'disabled':''}>Продать принесённого тунца</button></div>`);return;}
   if (cur.tab === 'catch') { const fish = Object.entries(c.bag).filter(([k, n]) => RES[k] && RES[k].fish && n >= 1); const moored = w.ships.filter((s) => s.owner === c.id && s.berth && s.berth.startsWith('b' + b.id + ':')); const hold = moored.flatMap((s) => Object.entries(s.cargo || {}).filter(([k, n]) => RES[k] && RES[k].fish && n >= 1));
-    setHTML($('mbody'), `<div class="card"><div class="muted">Рыбаки гавани берут свежий улов прямо с причала — дороже скупщика (×1.15). Пришвартуйте баркас или лодку (G у руля) и сдайте рыбу из трюма или из сумки. Тунца здесь берут охотнее всего.</div></div><h3 class="sec">В сумке</h3>${fish.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Рыбы нет.</div>'}<h3 class="sec">В трюме пришвартованных кораблей</h3>${hold.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Пусто.</div>'}<div style="margin-top:8px"><button class="btn good" data-a="sellCatch" data-bid="${b.id}" ${fish.length || hold.length ? '' : 'disabled'}>Сдать весь улов</button></div>`); return; }
+    setHTML($('mbody'), `<div class="card"><div class="muted">Рыбаки гавани берут свежий улов прямо с причала — дороже скупщика (×1.15). Пришвартуйте баркас или лодку (G у руля) и сдайте рыбу из трюма или из сумки. Гарпунного тунца сначала выгрузите с баркаса (G → Корабль → Взять тунца), затем принесите сюда в руках.</div></div><h3 class="sec">В сумке</h3>${fish.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Рыбы нет.</div>'}<h3 class="sec">В трюме пришвартованных кораблей</h3>${hold.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Пусто.</div>'}<div style="margin-top:8px"><button class="btn good" data-a="sellCatch" data-bid="${b.id}" ${fish.length || hold.length ? '' : 'disabled'}>Сдать весь улов</button></div>`); return; }
   if (cur.tab === 'ships') setHTML($('mbody'), Object.entries(SHIPS).map(([k, s]) => `<div class="card"><div class="row" style="border:0"><span class="grow t">${s.name}</span><span class="nm muted">скорость ${s.speed}, мест ${s.seats}, трюм ${s.cargo}, прочность ${s.hp}${s.ram ? ', таран' : ''}</span></div><div class="muted">${s.desc}</div><div class="row" style="border:0"><span class="grow" style="font-size:12px">${costHtml(s.cost, c.bag)}${s.rank ? ` · звание «${RANKS[s.rank].name}»` : ''}</span><button class="btn sm" data-a="shipBuild" data-st="${k}" ${(s.rank || 0) > c.rank ? 'disabled' : ''}>Построить</button></div></div>`).join(''));
   else setHTML($('mbody'), shipsList());
 }
@@ -1132,12 +1142,13 @@ function shipCardHtml(s, full = true) {
   const pos=C.ships.get(s.id)?.obj.position, saleProblems=[];
   if (!pos || !S.blds.some(b=>b.type==='portus'&&b.built&&!b.ruined&&!b.enemy&&Math.hypot(b.x-pos.x,b.z-pos.z)<90&&Math.hypot(b.x-S.me.x,b.z-S.me.z)<90)) saleProblems.push('Вы и корабль должны быть у одной римской гавани');
   if (S.ship===s.id||[...C.players.values()].some(p=>p.ship===s.id)) saleProblems.push('Высадите всех пассажиров');
-  if ((s.crates||[]).length||Object.values(s.cargo||{}).some(n=>n>0)) saleProblems.push('Разгрузите трюм и ящики');
+  if((s.tunaHold||[]).some(Boolean)||(s.crates||[]).length||Object.values(s.cargo||{}).some(n=>n>0)) saleProblems.push('Разгрузите трюм и ящики');
   if (s.route) saleProblems.push('Остановите торговый путь');
   const saleDisabled=saleProblems.length?'disabled title="'+esc(saleProblems.join('. '))+'"':'';
   const crates = (s.crates || []).map((k, i) => `<div class="row"><span class="grow">📦 ${crateName(k)}</span>${!c.carry && access ? `<button class="btn sm alt" data-a="crateUnload" data-sid="${s.id}" data-i="${i}">Взять в руки</button>` : ''}</div>`).join('') || '<div class="muted">Ящиков на борту нет.</div>';
   let html = `<div class="card"><div class="t">${esc(s.name)} <span class="muted">· ${def.name}</span></div><div class="stat"><span>Прочность</span><span>${s.hp}/${s.maxHp}</span></div><div class="stat"><span>Ящики</span><span>${(s.crates || []).length} / ${def.crates}</span></div>${s.berth ? '<div class="muted">⚓ стоит у причала</div>' : ''}</div>
     <h3 class="sec">Ящики на борту</h3>${crates}${c.carry && access ? `<button class="btn sm" data-a="crateLoad" data-sid="${s.id}" style="margin-top:6px">Погрузить ящик из рук (${crateName(c.carry)})</button>` : ''}`;
+  if(s.type==='barca')html+=`<div class="card"><h3>Кормовой гарпун и два места улова</h3><p>На борту: H — гарпун, ЛКМ — выстрел, Пробел — тянуть; отпускайте во время рывков. Для выгрузки сойдите на берег рядом с баркасом.</p>${[0,1].map(i=>`<div class="row"><span class="grow">${i===0?'Левый':'Правый'} борт: ${s.tunaHold?.[i]?`тунец ${s.tunaHold[i].kg} кг`:'свободно'}</span>${mine&&s.tunaHold?.[i]?`<button class="btn sm" data-a="tunaUnload" data-sid="${s.id}" data-slot="${i}" ${S.ship||c.tunaCarry||c.carry?'disabled':''}>Взять тунца</button>`:mine&&c.tunaCarry?`<button class="btn sm" data-a="tunaLoad" data-sid="${s.id}" data-slot="${i}">Вернуть на борт</button>`:''}</div>`).join('')}${c.tunaCarry?`<p>В руках: тунец ${c.tunaCarry.kg} кг. Несите к гавани → Рыбный причал.</p>`:''}</div>`;
   if (!mine && s.forSale) html += `<div class="row"><span class="grow">⚖ Продаётся владельцем за <b>${s.forSale}</b> ден.</span><button class="btn sm good" data-a="shipBuy" data-sid="${s.id}">Купить</button></div>`;
   if (!full || !mine) return html;
   html += `<h3 class="sec">Продать или передать</h3>${saleProblems.length?`<div class="muted">Для продажи: ${saleProblems.map(esc).join(' · ')}</div>`:''}<div class="row"><span class="grow muted">Риму — в римской гавани у причала: продажа за 55% стоимости материалов или безвозмездный дар (большое одобрение Рима). Другим гражданам — выставьте цену, покупатель подойдёт и купит.</span></div><div class="row"><button class="btn sm" data-a="shipRome" data-sid="${s.id}" ${saleDisabled}>Продать Риму</button><button class="btn sm good" data-a="shipRome" data-sid="${s.id}" data-gift="1" ${saleDisabled}>Подарить Республике</button><input id="sale_${s.id}" class="num" value="${s.forSale || 1000}"><button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}">${s.forSale ? 'Изменить цену' : 'Выставить на продажу'}</button>${s.forSale ? `<button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}" data-off="1">Снять</button>` : ''}</div>`;
@@ -1357,6 +1368,7 @@ function drawMap(ctx, W2, H2, cx, cz, span, mini) {
   }
   if (lay('land')) for (const tm of (S.char && S.char.sci && S.char.sci.maps) || []) { ctx.strokeStyle = '#ffd24a'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(toX(tm.ax), toY(tm.az), Math.max(5, 25 * s), 0, 6.28); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; ctx.fillStyle = '#ffd24a'; ctx.font = 'bold 13px sans-serif'; ctx.fillText('✕ клад', toX(tm.ax), toY(tm.az) - Math.max(8, 25 * s) - 4); }
   if (lay('land') && S.char && S.char.lat) { const L = S.char.lat; ctx.strokeStyle = '#9fe0ff'; ctx.lineWidth = 2; ctx.strokeRect(toX(L.x - L.half), toY(L.z - L.half), L.half * 2 * s, L.half * 2 * s); ctx.lineWidth = 1; }
+  if(lay('land')&&!mini&&span<1100)for(const C of S.W.cities){const r=C.R-12,pts=[[12,-12],[r,-12],[r*.7,-r*.7],[12,-r]].map(([u,v])=>WG.cityPt(C,u,v));ctx.beginPath();pts.forEach(([x,z],i)=>i?ctx.lineTo(toX(x),toY(z)):ctx.moveTo(toX(x),toY(z)));ctx.closePath();ctx.fillStyle='rgba(85,190,125,.2)';ctx.fill();ctx.strokeStyle='#8ed59b';ctx.lineWidth=1;ctx.stroke();if(span<550){const[x,z]=WG.cityPt(C,C.R*.42,-C.R*.42);ctx.fillStyle='#8ed59b';ctx.font='11px sans-serif';ctx.fillText('Жилой квартал',toX(x),toY(z));}}
   // римские дороги
   ctx.strokeStyle = 'rgba(120,100,80,.85)'; ctx.lineWidth = Math.max(1.2, 5 * s);
   if (lay('cities')) for (const rd of WG.roadsList()) { ctx.beginPath(); rd.pts.forEach((p, i) => (i ? ctx.lineTo(toX(p[0]), toY(p[1])) : ctx.moveTo(toX(p[0]), toY(p[1])))); ctx.stroke(); }
@@ -1379,6 +1391,7 @@ function drawMap(ctx, W2, H2, cx, cz, span, mini) {
   // порты
   if (!mini && lay('sea')) for (const p of Object.values(PORTS)) { ctx.fillStyle = '#bfe6ff'; ctx.fillText('Порт ' + p.name, Math.max(60, Math.min(W2 - 60, toX(p.x))), Math.max(12, Math.min(H2 - 12, toY(p.z)))); }
   // косяки
+  if(S.st?.tuna&&lay('sea'))for(const f of S.st.tuna.fish){ctx.fillStyle='#79e9ff';ctx.beginPath();ctx.arc(toX(f[1]),toY(f[2]),mini?2:4,0,6.28);ctx.fill();}
   if (S.st && lay('sea')) for (const f of S.st.f) { ctx.fillStyle = f[3] === 'tuna' ? '#9fe0ff' : 'rgba(200,240,255,0.7)'; ctx.beginPath(); ctx.arc(toX(f[1]), toY(f[2]), mini ? 2 : 3, 0, 6.28); ctx.fill(); }
   // корабли
   if (S.st && lay('sea')) { for (const sh of S.st.sh) { ctx.fillStyle = '#e8f4ff'; ctx.beginPath(); ctx.arc(toX(sh[2]), toY(sh[3]), 3.5, 0, 6.28); ctx.fill(); } for (const sh of S.st.es) { ctx.fillStyle = '#ff5a4a'; ctx.beginPath(); ctx.arc(toX(sh[2]), toY(sh[3]), 4.5, 0, 6.28); ctx.fill(); } }

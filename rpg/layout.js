@@ -49,3 +49,22 @@ export function arrangeCityAdditions(W, cities) {
   }
   return moved;
 }
+
+export function protectCivicLayout(W,C){
+ const privateBuildings=W.buildings.filter(b=>!b.muni&&!D.BUILDINGS[b.type]?.road);
+ const claims=Object.keys(W.plots||{}).filter(k=>k.startsWith(C.id+':')).map(k=>{const[,i,j]=k.split(':');const[x,z]=WG.cellCenter(C,+i,+j);return{x,z};});
+ for(const L of C.layout){
+  if(!['curia','templum','mercator','thermae','armamentarium','theatrum','horreum','stabulum','campus','servile','collegium'].includes(L.type))continue;
+  const r=D.BUILDINGS[L.type].r;
+  const clear=p=>!WG.portOverlap(p.x,p.z,r,C.layout.filter(q=>q.type==='portus'))&&!privateBuildings.some(b=>Math.hypot(b.x-p.x,b.z-p.z)<r+(D.BUILDINGS[b.type]?.r||4)+3)&&!claims.some(q=>Math.hypot(q.x-p.x,q.z-p.z)<r+3);
+  if(clear(L))continue;
+  let found=null;
+  for(let d=24;d<C.R+240&&!found;d+=4)for(const side of [-1,1])for(const axis of [0,1]){
+   const [x,z]=WG.cityPt(C,axis?side*d:-r-7,axis?r+7:side*d),p=WG.blockSnap(C,x,z,D.cellsOf(L.type));
+   if(WG.terrainHeight(p.x,p.z)<1||WG.slopeAt(p.x,p.z,r*.7).d>4||!clear(p)||C.layout.some(o=>o!==L&&Math.hypot(o.x-p.x,o.z-p.z)<r+(D.BUILDINGS[o.type]?.r||4)+3))continue;
+   found={x:p.x,z:p.z,ry:C.ry+(axis?Math.PI:Math.PI/2)};break;
+  }
+  if(found)Object.assign(L,found,{avenue:true});
+ }
+ WG.extendCivicAvenues(C);
+}

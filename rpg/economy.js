@@ -103,6 +103,7 @@ export function costOf(type, pos = null) {
 export function placeCheck(p, type, x, z, ry, moving = false) {
   const def = BUILDINGS[type], c = p.char;
   if (!def) return 'Нет такой постройки';
+  if(type==='via_cell')return 'Городские улицы прокладывает местный эдил через Курию.';
   if (def.need && !def.need.every((k) => hasBuilt(k))) return 'Сначала постройте: ' + def.need.filter((k) => !hasBuilt(k)).map((k) => BUILDINGS[k].name).join(', ');
   const isl = WG.islandAt(x, z);
   if (def.colony) {
@@ -188,6 +189,7 @@ const FASTB = process.env.FAST === '1';
 // снос постройки: дорогу — кто её положил, эдил, префект (или любой, если обе должности свободны); частное — хозяин; возврат части материалов
 export function demolish(p, bid) {
   const b = B(bid), c = p.char; if (!b) return;
+  if(b.type==='via_cell'&&cityOff(b.city).offices.aedilis?.id!==c.id)return;
   const def = BUILDINGS[b.type], say = (t, k = 'warn') => send(p, { type: 'log', text: t, kind: k });
   if (dist(p, b) > 60 && !(b.owner === c.id && !def.pub)) return say('Подойдите ближе.'); // своё частное здание можно снести издалека (из «Владений»)
   const o = cityOff(b.city || 'messana').offices, official = (o.aedilis && o.aedilis.id === c.id) || (o.praefectus && o.praefectus.id === c.id), vacant = !o.aedilis && !o.praefectus;
@@ -196,6 +198,7 @@ export function demolish(p, bid) {
   const k = (def.road ? 0.5 : 0.3) * (D.specTop(c, 'build') ? 2 : 1), back = [];
   for (const [r, n] of Object.entries(b.built ? b.cost : b.prog || {})) { const m = Math.floor(n * k); if (m > 0) { addRes(c, r, m, true); back.push(`${RES[r].name} ×${m}`); } }
   G.W.buildings = G.W.buildings.filter((x) => x !== b);
+  if(b.type==='via_cell')WG.setCityRoadCells(G.W.buildings);
   for (const sl of G.W.slaves) if (sl.bld === b.id) sl.bld = null;
   for (const s of G.W.ships) if (s.berth && s.berth.startsWith('b' + b.id + ':')) s.berth = null;
   G.dirtyBld = true; G.dirtyWorld = true; p.dirtyChar = true;
@@ -313,6 +316,7 @@ export function bldSale(p, bid, price) {
 }
 export function bldBuy(p, bid) {
   const b = B(bid), c = p.char; if (!b || !b.sale || !b.owner || b.owner === c.id) return;
+  if(b.type==='via_cell'&&cityOff(b.city).offices.aedilis?.id!==c.id)return;
   const def = BUILDINGS[b.type], say = (t, k = 'warn') => send(p, { type: 'log', text: t, kind: k });
   if (dist(p, b) > def.r + 12) return say('Подойдите к зданию.');
   const mine = G.W.buildings.filter((x) => x.owner === c.id && !BUILDINGS[x.type].colony && !x.muni && !BUILDINGS[x.type].pub);
@@ -723,7 +727,7 @@ export function updateShips(dt) {
     const inp = h ? h.helmIn : { f: 0, t: 0 };
     const target = inp.f * def.speed * (1 + 0.08 * ((s.up && s.up.sail) || 0)) * (h ? 1 + D.specOf(h.char, 'sail') * 0.04 : 1) * pharos * (storm ? 0.8 : 1) * (inp.f < 0 ? 0.35 : 1);
     s.speed += Math.sign(target - s.speed) * Math.min(Math.abs(target - s.speed), (target === 0 ? 1.2 : 2.2) * dt);
-    s.ry += inp.t * def.turn * dt * Math.min(1, Math.abs(s.speed) / 3 + 0.25) * (s.speed < 0 ? -1 : 1);
+    if(!s.berth)s.ry += inp.t * def.turn * dt * Math.min(1, Math.abs(s.speed) / 3 + 0.25) * (s.speed < 0 ? -1 : 1);
     if (Math.abs(s.speed) > 0.01) {
       const nx = s.x + Math.sin(s.ry) * s.speed * dt, nz = s.z + Math.cos(s.ry) * s.speed * dt;
       const bow = def.len / 2 * Math.sign(s.speed || 1);
@@ -867,7 +871,7 @@ export function cast(p, x, z) {
   for (const s of G.schools.values()) { const d = Math.hypot(s.x - x, s.z - z); if (d < bd) { bd = d; school = s; } }
   const t = now();
   p.fishing = { x, z, t0: t, biteAt: t + (school ? rand(1.2, 3.5) : rand(4, 10)) * (1 - D.specOf(c, 'fish') * 0.1) * (1 - (w.luck || 0) * 0.5), school: school ? school.id : null, state: 'wait' };
-  if (w.big) { const sh = p.ship && G.W.ships.find((s) => s.id === p.ship); if (!sh || sh.type !== 'barca') send(p, { type: 'log', text: 'Большой удочкой ловят тунца с рыбацкого баркаса (и вдвоём). Так клюёт только мелочь.', kind: 'warn' }); }
+  if (w.big) { const sh = p.ship && G.W.ships.find((s) => s.id === p.ship); if (!sh || sh.type !== 'barca') send(p, { type: 'log', text: 'Тяжёлая удочка предназначена для морской рыбалки. Тунца ловят кормовым гарпуном баркаса (H), а не удочкой.', kind: 'warn' }); }
   p.lastAtk = { t, kind: 'rod', combo: 0 };
   send(p, { type: 'cast', x, z, school: !!school });
 }
@@ -883,7 +887,7 @@ function rollFish(p, school, x, z) {
   }
   // тунец — только большой удочкой с баркаса, в открытом море или у косяка тунца
   const ship = p.ship && G.W.ships.find((s) => s.id === p.ship);
-  if (w.big && ship && ship.type === 'barca' && (deep || (school && school.kind === 'tuna')) && Math.random() < (school && school.kind === 'tuna' ? 0.75 : 0.35)) return 'f_tuna';
+  // Tuna are physical harpoon catches; rods keep their ordinary fish table.
   if (!school) { return Math.random() < 0.25 ? null : pick(['f_sardine', 'f_sardine', 'f_mackerel', 'f_seabass']); }
   const ent = Object.entries(FISH).map(([k, f]) => [k, f.chance[deep] * (f.chance[deep] < 5 ? 1 + luck * 4 : 1)]);
   let sum = ent.reduce((a, [, v]) => a + v, 0), r = Math.random() * sum;

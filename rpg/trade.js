@@ -14,7 +14,7 @@ const shipById = (id) => G.W.ships.find((s) => s.id === id);
 export const MAX_SHIPS = 3;
 
 // ---------- Причалы: гавань — 4 места (два причала, по кораблю с каждой стороны); торговец — 2 места ----------
-const BEAM = { scapha: 1.6, barca: 2, corbita: 4.6, liburna: 3.2, trireme: 4.2, quadrireme: 5, penteres: 5.4 };
+const BEAM = { scapha: 1.6, barca: 4.8, corbita: 4.6, liburna: 3.2, trireme: 4.2, quadrireme: 5, penteres: 5.4 };
 function local(o, lx, lz) { const c = Math.cos(o.ry || 0), s = Math.sin(o.ry || 0); return { x: o.x + lx * c + lz * s, z: o.z - lx * s + lz * c }; }
 export function berths(type) { // места вдоль каждого мостика гавани (с обеих сторон, несколько кораблей подряд), у набережной и у торговцев
   const L = SHIPS[type].len, B = BEAM[type] || 3, list = [];
@@ -29,11 +29,15 @@ export function berths(type) { // места вдоль каждого мост�
   for (const t of G.world.traders || []) for (const sd of [-1, 1]) { const p = local(t, sd * (1.8 + B / 2), 9 + L * 0.25), dk = local(t, 0, 9 + L * 0.25); list.push({ key: `t${t.id}:${sd}`, x: p.x, z: p.z, ry: t.ry, trader: t.id, deck: dk }); }
   return list;
 }
+export function berthFits(type,b){
+ const L=SHIPS[type].len,B=BEAM[type]||3,c=Math.cos(b.ry||0),s=Math.sin(b.ry||0);
+ return [[0,0],[-B*.48,0],[B*.48,0],[0,-L*.46],[0,L*.46],[-B*.3,-L*.35],[B*.3,-L*.35],[-B*.3,L*.35],[B*.3,L*.35]].every(([x,z])=>WG.shipOk(b.x+x*c+z*s,b.z-x*s+z*c));
+}
 export const berthByKey = (type, key) => key && berths(type).find((b) => b.key === key);
 export function freeBerth(type, near, maxD = 40, port = null) {
   const used = new Set(G.W.ships.filter((s) => s.berth).map((s) => s.berth));
   let best = null, bd = maxD;
-  for (const b of berths(type)) { if (used.has(b.key) || (port && b.port !== port)) continue; if (!WG.shipOk(b.x, b.z)) continue; const d = near ? Math.hypot(b.x - near.x, b.z - near.z) : 0; if (d < bd) { bd = d; best = b; } }
+  for (const b of berths(type)) { if (used.has(b.key) || (port && b.port !== port)) continue; if (!berthFits(type,b)) continue; const d = near ? Math.hypot(b.x - near.x, b.z - near.z) : 0; if (d < bd) { bd = d; best = b; } }
   return best;
 }
 function moorTick() {
@@ -41,8 +45,9 @@ function moorTick() {
     const rs = riders(s), helm = rs.find((q) => q.seat === 0);
     if (s.berth && helm && Math.abs(s.speed) > 0.8) s.berth = null;
     if (s.berth && helm && Math.abs(helm.helmIn?.f || 0) > 0.1) s.berth = null;
+    const invalid=s.berth&&!berthFits(s.type,s);if(invalid){s.berth=null;G.dirtyWorld=true;}
     if (s.berth || helm || Math.abs(s.speed) > 0.5) continue;
-    const b = freeBerth(s.type, s, 35); if (!b) continue;
+    const b = freeBerth(s.type, s, invalid?110:35); if (!b) continue;
     s.x = b.x; s.z = b.z; s.ry = b.ry; s.speed = 0; s.berth = b.key; G.dirtyWorld = true;
     for (const q of rs) say(q, '⚓ Корабль пришвартован у причала.');
   }
@@ -56,6 +61,7 @@ export function shipTrade(p, m) {
   const value = Object.entries(SHIPS[s.type].cost).reduce((a, [k, n]) => a + (D.RES[k] ? D.RES[k].p * n : 0), 0);
   if (['shipBuy','shipForSale','shipRome'].includes(m.type) && (s.route || (G.W.routes || []).some(r => r.on && r.ships.includes(s.id)))) return say(p, 'Сначала остановите торговый путь корабля.', 'warn');
   if (m.type === 'shipBuy') {
+    if((s.tunaHold||[]).some(Boolean))return say(p,'Сначала владелец должен выгрузить тунца.','warn');
     if (!s.forSale || s.owner === c.id) return; if (dist(p, s) > SHIPS[s.type].len / 2 + 12) return say(p, 'Подойдите к кораблю.', 'warn');
     if (G.W.ships.filter((x) => x.owner === c.id).length >= shipLimitOf(c)) return say(p, 'У вас уже предел кораблей.', 'warn');
     if (c.den < s.forSale) return say(p, `Нужно ${s.forSale} денариев.`, 'warn');
@@ -70,7 +76,7 @@ export function shipTrade(p, m) {
   if (m.type === 'shipRome') {
     const port = builtOf('portus').find((b) => dist(b, s) < 90 && dist(p, b) < 90); if (!port) return say(p, 'Передать корабль Риму можно в римской гавани (корабль у причала).', 'warn');
     if ([...G.players.values()].some((q) => q.ship === s.id)) return say(p, 'Сначала все должны сойти на берег.', 'warn');
-    if ((s.crates || []).length || Object.values(s.cargo || {}).some(n => n > 0)) return say(p, 'Сначала разгрузите корабль.', 'warn');
+    if ((s.tunaHold||[]).some(Boolean)||(s.crates || []).length || Object.values(s.cargo || {}).some(n => n > 0)) return say(p, 'Сначала разгрузите корабль.', 'warn');
     for (const r of G.W.routes || []) r.ships = r.ships.filter(id => id !== s.id);
     G.W.ships = G.W.ships.filter((x) => x !== s); for (const sl of G.W.slaves) if (sl.ship === s.id) sl.ship = null;
     if (m.gift) { grantDig(p, Math.round(value / 6)); log(`🦅 ${c.name} безвозмездно передал(а) Республике корабль «${s.name}». Рим благодарит!`, 'good'); }
@@ -94,6 +100,7 @@ const nearGuild = (p) => builtOf('collegium').find((b) => dist(p, b) < BUILDINGS
 export function crateMsg(p, m) {
   const c = p.char; c.guildCrates = c.guildCrates || {};
   const t = m.type;
+  if(['crateCraft','crateTake','crateUnload','cratePick'].includes(t)&&c.tunaCarry)return say(p,'Руки заняты тунцом: сначала отнесите его в гавань.','warn');
   if (t === 'crateCraft') {
     const g = nearGuild(p), def = CRATES[m.k]; if (!g || !def) return say(p, 'Ящики собирают в Торговой гильдии.', 'warn');
     if ((def.lvl || 0) > c.level) return say(p, `Нужен ${def.lvl} уровень.`, 'warn');

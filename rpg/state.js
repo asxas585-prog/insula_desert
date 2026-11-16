@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as D from '../public/rpg/data.js';
 import * as WG from '../public/rpg/world.js';
-import { arrangeCityAdditions } from './layout.js';
+import { arrangeCityAdditions, protectCivicLayout } from './layout.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEV = process.env.DEV === '1' || process.argv.includes('--dev');
@@ -74,10 +74,13 @@ export function loadAll() {
   for (const c of Object.values(G.chars)) for (const it of c.items || []) uid = Math.max(uid, (it.uid | 0) + 1);
   for (const c of Object.values(G.chars)) { for (const sq of c.squads || []) { uid = Math.max(uid, (sq.id | 0) + 1); sq.live = []; delete sq._previousLive; } for (const h of c.horses || []) uid = Math.max(uid, (h.id | 0) + 1); for (const l of c.lions || []) uid = Math.max(uid, (l.id | 0) + 1); if (c.guard) c.guard.id = null; }
   for (const r of W.routes || []) uid = Math.max(uid, (r.id | 0) + 1);
+  for (const q of W.quests || []) uid = Math.max(uid,(q.id|0)+1);
+  for(const s of W.ships)for(const f of s.tunaHold||[])if(f)uid=Math.max(uid,(f.id|0)+1);
   for (const o of W.slaveMarket || []) uid = Math.max(uid, (o.id | 0) + 1);
   for (const st of Object.values(W.watch || {})) st.live = [];
   uid += 10;
-  for (const c of Object.values(G.chars)) for (const record of [...(c.sunk || []), ...(c.warRent || [])]) uid = Math.max(uid, (record.id | 0) + 1);
+  for (const c of Object.values(G.chars)) for (const record of [...(c.sunk || []), ...(c.warRent || []),...(c.quests||[]),...(c.tunaCarry?[c.tunaCarry]:[])]) uid = Math.max(uid, (record.id | 0) + 1);
+  for(const c of Object.values(G.chars))for(const id of c.doneQuests||[])uid=Math.max(uid,(id|0)+1);
   for (const c of Object.values(G.chars)) if (c.squads) c.squads = c.squads.filter((sq) => !sq.war); // отряды Поля Марса — только на время боя
   W.cityOff = W.cityOff || {}; if (W.election !== undefined && W.cityOff.messana && W.cityOff.messana.election === undefined) W.cityOff.messana.election = W.election; cityOff('messana'); // Мессана: те же объекты, что G.W.offices / G.W.laws
   for (const s of W.slaves) if (!s.trait) Object.assign(s, D.rollSlave(s.grade || 1)); // навык и характеристики старым рабам
@@ -108,24 +111,7 @@ export function ensureCities(W) {
   for (const C of G.world.cities) {
     const st = W.cityState[C.id] = W.cityState[C.id] || { owner: C.owner, def: C.owner === 'rome' ? 0 : 100, tasks: {}, captured: null };
     // здание из сохранения ищем по городу и типу (ближайшее), чтобы смена планировки не путала здания
-    const guildLayout=C.layout.find(l=>l.type==='collegium');
-    if(guildLayout){
-      const saved=W.buildings.find(b=>b.type==='collegium'&&b.muni?.startsWith(C.id+':'));
-      if(saved?.guildRelocated){guildLayout.x=saved.x;guildLayout.z=saved.z;guildLayout.ry=saved.ry;}
-      {
-        const claimed=Object.keys(W.plots||{}).filter(k=>k.startsWith(C.id+':')).map(k=>{const [,i,j]=k.split(':');const [x,z]=WG.cellCenter(C,Number(i),Number(j));return{x,z};});
-        const clear=point=>!WG.portOverlap(point.x,point.z,D.BUILDINGS.collegium.r,W.buildings.filter(b=>b.type==='portus'))&&!W.buildings.some(b=>b!==saved&&dist(b,point)<(D.BUILDINGS[b.type]?.r||4)+D.BUILDINGS.collegium.r+3)&&!claimed.some(c=>dist(c,point)<D.BUILDINGS.collegium.r+D.CELL);
-        const snapped=WG.blockSnap(C,guildLayout.x,guildLayout.z,D.cellsOf('collegium'));
-        if(!clear(guildLayout)||Math.hypot(snapped.x-guildLayout.x,snapped.z-guildLayout.z)>.15){
-          let replacement=null;
-          for(let radius=C.R+24;radius<=C.R+180&&!replacement;radius+=12)for(let i=0;i<32;i++){
-            const a=i*Math.PI/16,point=WG.blockSnap(C,C.x+Math.sin(a)*radius,C.z+Math.cos(a)*radius,D.cellsOf('collegium')),x=point.x,z=point.z;
-            if(WG.terrainHeight(x,z)>.8&&WG.slopeAt(x,z,8).d<3.5&&WG.waterEdgeDist(x,z)>25&&!WG.onRoadNet(x,z)&&clear(point)){replacement={x:r1(x),z:r1(z),ry:C.ry||0};break;}
-          }
-          if(replacement)Object.assign(guildLayout,replacement,{guildRelocated:true});
-        }
-      }
-    }
+    protectCivicLayout(W,C);
     const used = new Set();
     C.layout.forEach((L, i) => {
       const key = C.id + ':' + i;
@@ -142,6 +128,7 @@ export function ensureCities(W) {
     W.buildings = W.buildings.filter((x) => !x.muni || !x.muni.startsWith(C.id + ':') || used.has(x)); // лишние (больше нет в планировке) — убираем
   }
   WG.setMuniFootprints(G.world.cities);
+  WG.setCityRoadCells(W.buildings);
   arrangeCityAdditions(W,G.world.cities);
   // городские здания, которых больше нет в планировке, убираются
   // ресурсы под городскими зданиями и улицами вырублены
@@ -274,6 +261,7 @@ export const hasTool = (c, flag) => [c.gear.weapon, ...c.items].some((g) => g &&
 export function charPublic(c) {
   const look = {}; for (const s of ['weapon', 'offhand', 'head', 'body', 'legs']) look[s] = c.gear[s] ? [c.gear[s].k, c.gear[s].q] : null;
   if (c.torch) look.torch = 1;
+  if(c.tunaCarry)look.tuna=c.tunaCarry.kg;
   if (c.carry) look.carry = D.CRATES[c.carry] ? D.CRATES[c.carry].grade : 1;
   return { name: c.name, color: c.color, level: c.level, rank: rankOf(c), look };
 }

@@ -1,6 +1,6 @@
 import { hasCityOffice, cityOf, localOffices } from './access.js';
 // Земля: разрешения Эдила на клетки в районах городов, разметка своих клеток, латифундии, колонии с промыслами
-import { G, D, WG, now, dist, send, log, chronicle, hasAll, payAll, rankOf, rankEarned, hasOffice, officesOf, book } from './state.js';
+import { G, D, WG, now, dist, send, log, nid, chronicle, hasAll, payAll, rankOf, rankEarned, hasOffice, officesOf, book } from './state.js';
 
 const { BUILDINGS, DISTRICTS, CELL, RANKS, LATIFUNDIUM } = D;
 const say = (p, text, kind = 'warn') => send(p, { type: 'log', text, kind });
@@ -156,4 +156,19 @@ export function buyRank(p) {
   c.den -= next.fee; G.W.treasury += next.fee; c.rankBought = cur + 1;
   log(`🏛 ${c.name} внёс(ла) взнос в Курии и получает звание «${next.name}»!`, 'good'); chronicle(`${c.name} получил(а) звание «${next.name}»`);
   p.dirtyChar = true; G.dirtyWorld = true;
+}
+
+// One publicly owned 4×4 m cell; only the serving aedile of this city.
+export function cityRoad(p,m){
+ const C=WG.cityById(m.city);if(!C||!p.alive||p.inst||!roman(C.id))return;
+ if(!hasCityOffice(p.char,'aedilis',C.id))return say(p,'Прокладывать улицы может только эдил этого города.');
+ const i=m.i|0,j=m.j|0,[x,z]=WG.cellCenter(C,i,j),[u,v]=WG.cityLocal(C,x,z);
+ if(dist(p,{x,z})>90)return say(p,'Прокладывайте улицу рядом с собой.');
+ if(Math.hypot(u,v)>C.R-9||Math.abs(u)<6.5||Math.abs(v)<6.5)return say(p,'Главные дороги и стены менять нельзя.');
+ if(!WG.cityRoadAllowed(C,i,j,G.W.buildings,plots()))return say(p,'Нужна свободная городская клетка рядом с существующей улицей, без участков и зданий.');
+ const cost=BUILDINGS.via_cell.cost;
+ if(!hasAll(p.char,cost))return say(p,'Нужен камень: '+cost.stone);
+ payAll(p.char,cost);G.W.buildings.push({id:nid(),type:'via_cell',x,z,ry:C.ry,city:C.id,cell:{i,j},owner:null,built:true,hp:200,maxHp:200,store:{},cost:{...cost},prog:{...cost},level:1});
+ WG.setCityRoadCells(G.W.buildings);G.dirtyBld=G.dirtyWorld=true;p.dirtyChar=true;
+ say(p,'Улица проложена: одна клетка 4×4 м.','good');
 }

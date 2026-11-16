@@ -25,10 +25,10 @@ export function grantXp(p, n) {
   }
   p.dirtyChar = true;
 }
-export function grantDig(p, n, why) {
+export function grantDig(p, n, why, bonuses = true) {
   const c = p.char; if (!c || n <= 0) return;
   const before = rankOf(c), e0 = D.rankIdx(c.dig || 0);
-  const temple = G.W.buildings.some((b) => b.type === 'templum' && b.built);
+  const temple = bonuses && G.W.buildings.some((b) => b.type === 'templum' && b.built);
   c.dig = (c.dig || 0) + Math.round(n * (temple ? 1.2 : 1));
   const after = rankOf(c), e1 = D.rankIdx(c.dig || 0);
   if (e1 > e0 && c.rankBought != null && e1 > c.rankBought) send(p, { type: 'log', text: `🦅 Рим одобряет вас для звания «${D.RANKS[c.rankBought + 1].name}». Внесите ${D.RANKS[c.rankBought + 1].fee} ден. в Курии, чтобы получить его.`, kind: 'good' });

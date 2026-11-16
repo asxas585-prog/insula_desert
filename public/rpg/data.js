@@ -157,7 +157,7 @@ export const GEAR = {
   rod_bronze: { name: 'Тростниковая удочка с бронзовым кольцом', slot: 'weapon', kind: 'rod', dmg: 2, cd: 1, range: 1.8, stam: 0, p: 90, tier: 1, luck: 0.12 },
   rod_pro: { name: 'Удочка из бамбука с бронзовым крючком', slot: 'weapon', kind: 'rod', dmg: 2, cd: 1, range: 1.8, stam: 0, p: 220, tier: 2, luck: 0.25 },
   rod_master: { name: 'Кедровая удочка мастера с серебряной оснасткой', slot: 'weapon', kind: 'rod', dmg: 2, cd: 1, range: 1.8, stam: 0, p: 600, tier: 3, luck: 0.4 },
-  rod_tuna: { name: 'Большая тунцовая удочка', slot: 'weapon', kind: 'rod', dmg: 3, cd: 1, range: 1.8, stam: 0, p: 400, tier: 2, luck: 0.2, big: true },
+  rod_tuna: { name: 'Тяжёлая морская удочка', slot: 'weapon', kind: 'rod', dmg: 3, cd: 1, range: 1.8, stam: 0, p: 400, tier: 2, luck: 0.2, big: true },
   torch: { name: 'Факел', slot: 'weapon', kind: 'torch', dmg: 7, cd: 0.6, range: 2, stam: 4, p: 5, tier: 0 },
 };
 export const ARMOR_CAP = 70;
@@ -224,6 +224,7 @@ export const BUILDINGS = {
   murus: { name: 'Участок стены', pub: true, r: 6, cost: { stone: 25 }, need: ['castra'], multi: true, desc: 'Стена задерживает налётчиков.' },
   pharos: { name: 'Маяк', pub: true, r: 6, shore: true, cost: { stone: 60, marble: 20, plank: 20 }, need: ['portus'], desc: 'Набеги с моря видны на 60 секунд раньше; корабли быстрее на 10%.' },
   stabulum: { name: 'Общественная конюшня', cat: 'rural', pub: true, muni: true, r: 9, cost: { wood: 40, stone: 15 , calamus: 20}, desc: 'Городская конюшня: коня берут на время (на сутки), здесь же оставляют на постой. Владельцы своих конюшен покупают тут жеребят со скидкой 90%.' },
+  via_cell: { name:'Городская улица (клетка)',pub:true,road:true,multi:true,r:2,len:4,wid:4,cost:{stone:5},desc:'Улица 4×4 м. Прокладывает только местный эдил, по сетке города, соединяя с существующей дорогой.' },
   via: { name: 'Римская дорога', pub: true, road: true, multi: true, r: 4, len: 8, wid: 4, ports: [[0, 4, 0], [0, -4, Math.PI]], cost: { stone: 10 }, desc: 'Мощёный участок 4×8 м. Ставится сразу из вашей сумки где угодно на главном острове; по дороге ходят на 25% быстрее.' },
   via_turn: { name: 'Поворот дороги', pub: true, road: true, multi: true, r: 2.5, len: 4, wid: 4, ports: [[0, -2, Math.PI], [2, 0, Math.PI / 2]], cost: { stone: 5 }, desc: 'Угловой участок 4×4 м: дорога поворачивает под прямым углом. Колесо — повернуть в другую сторону.' },
   via_cross: { name: 'Перекрёсток', pub: true, road: true, multi: true, r: 2.5, len: 4, wid: 4, ports: [[0, 2, 0], [0, -2, Math.PI], [2, 0, Math.PI / 2], [-2, 0, -Math.PI / 2]], cost: { stone: 5 }, desc: 'Перекрёсток 4×4 м: дороги расходятся на четыре стороны.' },
@@ -436,7 +437,7 @@ export const HOSTILE = new Set(['beast', 'barbarian', 'pirate', 'punic', 'robber
 
 // ---------- Корабли ----------
 export const SHIPS = {
-  barca: { name: 'Рыбацкий баркас', cost: { plank: 25, wood: 15, linen: 4 }, speed: 8.5, turn: 1.2, seats: 4, cargo: 400, hp: 260, len: 9, desc: 'Баркас для ловли тунца: на корме — стойка для большой удочки. Тунца тянут вдвоём.' },
+  barca: { name: 'Рыбацкий баркас', cost: { plank: 25, wood: 15, linen: 4 }, speed: 8.5, turn: 1.2, seats: 4, cargo: 400, hp: 260, len: 12, desc: 'Морской баркас с кормовым гарпуном и двумя бортовыми ложементами для тунца. Улов выгружают и несут в гавань.' },
   scapha: { name: 'Лодка (скафа)', cost: { plank: 15, wood: 10 }, speed: 9, turn: 1.4, seats: 2, cargo: 60, hp: 160, len: 5, need: null, desc: 'Быстрая лодка для рыбалки и перевозки двух человек.' },
   corbita: { name: 'Торговая корбита', cost: { plank: 60, wood: 40, linen: 10, iron: 4 }, speed: 8, turn: 0.7, seats: 6, cargo: 600, hp: 450, len: 14, desc: 'Пузатое торговое судно: большой трюм для вывоза ресурсов колоний.' },
   liburna: { name: 'Либурна', cost: { plank: 80, cedar: 20, linen: 12, iron: 12 }, speed: 12, turn: 1.0, seats: 8, cargo: 120, hp: 700, len: 18, ram: 160, rank: 2, desc: 'Лёгкий военный корабль с тараном. Экипаж может стрелять с палубы.' },
@@ -486,6 +487,9 @@ export const OFFICES = {
   censor: { name: 'Цензор', icon: '⚖', minRank: 5, desc: 'Высшее одобрение Рима: пересматривает списки граждан — одобрение Рима всем, кто рядом на Форуме, растёт на 20% быстрее.' },
   lanista: { name: 'Ланиста (распорядитель игр)', icon: '🏟', minRank: 1, desc: 'Устраивает гладиаторские игры на Арене и получает долю ставок.' },
 };
+
+// Городская служба: очки за выполненные поручения, без автоматического назначения.
+for(const [k,n] of Object.entries({praefectus:50,legatus:30,magister:20,senator:40,aedilis:20,quaestor:20,navarchus:30,censor:60,lanista:10}))OFFICES[k].minOfficePoints=n;
 
 // ---------- Законы ----------
 export const LAWS = {
@@ -576,7 +580,7 @@ export const buyerOpen = (gt) => { const h = dayClock(gt); return h >= BUYER_HOU
 // price — денарии за клетку, rank — звание, rare — редкие ресурсы за клетку, mul — множитель производства и дохода
 export const CELL = 4;
 export const DISTRICTS = {
-  center: { name: 'Центральный (у форума)', price: 55, rank: 2, rare: { marble: 0.5 }, mul: 1.4, color: '#ffd76a' },
+  center: { name: 'Жилой квартал (четверть города)', price: 55, rank: 2, rare: { marble: 0.5 }, mul: 1.4, color: '#8ed59b' },
   harbor: { name: 'При гавани', price: 32, rank: 1, rare: null, mul: 1.25, color: '#7fc6ff' },
   outer: { name: 'Окраинный (до стен)', price: 22, rank: 1, rare: null, mul: 1.15, color: '#b8d890' },
   extra: { name: 'Застенный (за стенами)', price: 9, rank: 0, rare: null, mul: 1.0, color: '#d8b880' },
@@ -592,7 +596,7 @@ export const EVENT_INFO = {
   pirates: { icon: '🏴', name: 'Пираты', when: 'Когда у колонистов есть корабли.', dur: '10 минут', what: 'Киликийские пираты охотятся за кораблями с грузом и таранят их.', todo: 'Держите корабли у причала или потопите пиратов.', reward: 'Добыча, карта сокровищ с потопленного пирата.' },
   rome: { icon: '🦅', name: 'Запрос Рима', when: 'Когда в городе есть форум.', dur: '15 минут', what: 'Рим просит привезти на Форум партию товара.', todo: 'Сдайте товар на Форуме из сумки или со склада.', reward: 'Денарии вам и в казну, расположение Рима, достоинство.' },
   storm: { icon: '⛈', name: 'Шторм', when: 'Случайно.', dur: '≈3 минуты', what: 'Ветер и дождь: корабли идут медленнее, видно хуже.', todo: 'Переждать у берега или плыть осторожно.', reward: '—' },
-  tuna: { icon: '🐟', name: 'Ход тунца', when: 'Случайно.', dur: '6 минут', what: 'У островов идут косяки тунца.', todo: 'Тунца ловят большой удочкой с баркаса, вдвоём (второй жмёт E).', reward: 'Дорогая рыба и трофеи.' },
+  tuna: { icon: '🐟', name: 'Ход тунца', when: 'Случайно.', dur: '6 минут', what: 'У островов идут косяки тунца.', todo: 'Тунца видно у поверхности: H на баркасе — кормовой гарпун, ЛКМ — выстрел, Пробел — подтягивать линь. Улов несут в гавань.', reward: 'Дорогая рыба и трофеи.' },
   merchant: { icon: '⛵', name: 'Купцы из Александрии', when: 'Когда в городе есть гавань.', dur: '8 минут', what: 'На рынке появляется редкое снаряжение.', todo: 'Загляните на рынок, пока купцы не уплыли.', reward: 'Редкие вещи за денарии.' },
   inspect: { icon: '🏛', name: 'Инспекция Рима', when: 'Когда построено 4+ общественных здания.', dur: 'мгновенно', what: 'Легат из Рима осматривает колонию.', todo: 'Держите 5+ общественных зданий целыми и без руин.', reward: 'Довольный легат — денарии в казну и расположение Рима; недовольный — расположение падает.' },
   caravan: { icon: '🐂', name: 'Обоз снабжения врага', when: 'Во время похода на вражеский город.', dur: 'пока едет', what: 'Пунийский обоз под охраной едет по дороге к вражескому городу.', todo: 'Перехватите его на дороге и разбейте.', reward: 'Добыча; оборона города снижается.' },

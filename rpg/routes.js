@@ -125,7 +125,8 @@ export function routeMsg(p, m) {
     const r = R.find((x) => x.id === m.rid && x.owner === c.id); if (!r) return;
     if (m.type === 'routeDel') { stopRoute(r); G.W.routes = R.filter((x) => x !== r); say(p, 'Путь закрыт.', 'info'); }
     else if (m.type === 'routeShip') { // назначить/снять корабль
-      const s = G.W.ships.find((x) => x.id === m.sid && x.owner === c.id); if (!s || r.kind !== 'sea') return;
+      const s = G.W.ships.find((x) => x.id === m.sid && x.owner === c.id);
+      if(s&&(s.tunaHold||[]).some(Boolean))return say(p,'Сначала выгрузите тунца с баркаса.'); if (!s || r.kind !== 'sea') return;
       if (m.on) { if (s.route && s.route !== r.id) return say(p, 'Корабль уже на другом пути.'); if ([...G.players.values()].some((q) => q.ship === s.id)) return say(p, 'Сначала сойдите с корабля.'); if (!r.ships.includes(s.id)) r.ships.push(s.id); }
       else { r.ships = r.ships.filter((x) => x !== s.id); if (s.route === r.id) { s.route = null; s.speed = 0; } }
     } else if (m.type === 'routeWagons') { const n = Math.max(1, Math.min(6, m.n | 0)); if (n > r.wagons) { const cost = (n - r.wagons) * WAGON.price; if (c.den < cost) return say(p, `Повозки стоят ${WAGON.price} ден. за штуку.`); c.den -= cost; book(c, 'Расход: повозки торгового пути', -cost); } r.wagons = n; }

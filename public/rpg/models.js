@@ -2819,6 +2819,7 @@ BUILD.amphitheatrum = (g) => {
   g.userData.arena = { a: aI, b: bI, gates: [[aI + pw, 0], [-(aI + pw), 0]] };
 };
 // ---------- Римская дорога: участок 4×8 м ----------
+BUILD.via_cell=(g)=>{ P(g,box(4,.12,4),M(0x77736b),0,.03,0);for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)P(g,box(1.23,.03,1.23),M((i+j)%2?0x969081:0xaaa38e),i*1.31,.11,j*1.31); };
 BUILD.via = (g) => {
   const r = rng(7);
   P(g, tbox(4.3, 1.0, 8.02), M(0x8a7a60), 0, -0.42, 0);          // насыпь уходит в землю
