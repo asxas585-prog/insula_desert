@@ -15,7 +15,7 @@ const lvlOf = (id) => D.CAMPAIGN.lvl[id] || 5;
 // весть только тем, кто рядом с городом
 const near = (C, text, kind = 'warn', r = 1300) => { for (const p of nearPlayers(C.x, C.z, r)) send(p, { type: 'log', text, kind }); };
 const syr = (C) => C.owner === 'syr';
-export const need = (C, k) => (k === 'fleet' && !C.harbor ? 0 : k === 'caravan' && !C.harbor ? T.caravan.n * 2 : T[k].n);
+export const need = (C, k) => (k==='plunder'?Math.min(T.plunder.n,C.suburbs.filter(s=>!G.world.pois.find(p=>p.id===s.poi)?.suppressed).length):k === 'fleet' && !C.harbor ? 0 : k === 'caravan' && !C.harbor ? T.caravan.n * 2 : T[k].n);
 const troop = (C, role) => syr(C) ? { inf: 'syr_hoplite', rng: 'syr_archer', vet: 'syr_hoplite', boss: 'syr_strategos' }[role] : { inf: 'punic_inf', rng: 'punic_slinger', vet: 'punic_vet', boss: 'punic_officer' }[role];
 
 // убит воин чужого города (стража, охрана усадеб и обозов): оборона −1
@@ -64,7 +64,7 @@ function spyTick(t) {
 }
 // ---------- Пригороды ----------
 export function plunder(p, poiId) {
-  const q = G.world.pois.find((x) => x.id === poiId && x.type === 'suburb_villa'); if (!q || dist(p, q) > 14) return;
+  const q = G.world.pois.find((x) => x.id === poiId && x.type === 'suburb_villa'); if (!q || q.suppressed || dist(p, q) > 14) return;
   const C = cityW(q.city), st = CS(q.city); if (!st || st.owner === 'rome') return;
   st.burnt = st.burnt || {};
   if (st.burnt[q.id]) return;
@@ -97,7 +97,7 @@ function guardsTick(C, t) {
   // пригородные усадьбы: охрана появляется, когда кто-то подходит
   st.burnt = st.burnt || {};
   for (const s of C.suburbs) {
-    if (st.burnt[s.poi]) continue;
+    if (st.burnt[s.poi]||G.world.pois.find(p=>p.id===s.poi)?.suppressed) {const old=R.sub[s.poi];if(old)for(const id of old.live)G.mobs.delete(id);continue;}
     const r = R.sub[s.poi] || (R.sub[s.poi] = { live: [], at: 0 });
     r.live = alive(r.live);
     const nr = nearPlayers(s.x, s.z, 130).length;
@@ -217,6 +217,7 @@ export function campaignTick(dt) {
   spyTick(t);
   for (const m of G.mobs.values()) if (m.follow) followTick(m);
   if (acc < 1) return; acc = 0;
+  WG.protectEstates(G.world,G.W.cityState,G.W.buildings);
   for (const C of G.world.cities) {
     const st = CS(C.id); if (!st || st.owner === 'rome') continue;
     guardsTick(C, t); caravanTick(C, t); fleetTick(C, t); assaultTick(C, t);

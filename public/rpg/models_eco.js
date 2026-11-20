@@ -1061,9 +1061,9 @@ SHIPDEF.barca = { L:12,Bm:3.4,D:1.05,deckY:.62,bul:.65,riseB:.8,riseS:.85,pb:1.7
 export function addBarcaGear(ship) {
   const rock = ship.userData.rock || ship, fy = -0.12;
   const gear = grp(rock, 0, 0, 0); gear.name = 'barcaGear';
-  // Fixed stern platform, pivoting heavy harpoon and twin fish cradles.
-  P(gear,box(2.1,.18,2.1),M(C.woodD),0,.78,-3.65);
-  const mt=grp(gear,0,.9,-4.05);mt.name='harpoonMount';
+  // Fixed bow platform, pivoting heavy harpoon and twin fish cradles.
+  P(gear,box(2.1,.18,2.1),M(C.woodD),0,.78,3.65);
+  const mt=grp(gear,0,.9,4.05);mt.rotation.y=Math.PI;mt.name='harpoonMount';
   P(mt,cyl(.25,.35,.85,12),bronzeM(),0,.42,0);
   P(mt,box(.35,.3,2.5),M(C.woodD),0,1,-.35);
   P(mt,cyl(.045,.045,3.3,8),ironM(),0,1.2,-.9,HPI);

@@ -1,3 +1,4 @@
+import {plotSize} from './footprints.js';
 // Insula Deserta: Империя — общие данные RPG (сервер и клиент)
 // Все числа баланса — здесь.
 
@@ -129,6 +130,7 @@ export const GEAR = {
   spatha: { name: 'Спата', slot: 'weapon', kind: 'blade', dmg: 21, cd: 0.7, range: 2.8, stam: 8, p: 180, tier: 2 },
   axe: { name: 'Топор (секира)', slot: 'weapon', kind: 'axe', dmg: 24, cd: 0.95, range: 2.5, stam: 10, p: 60, tier: 1, chop: true },
   hasta: { name: 'Копьё (гаста)', slot: 'weapon', kind: 'spear', dmg: 18, cd: 0.75, range: 3.6, stam: 7, p: 70, tier: 1 },
+  lance: {name:'Кавалерийское копьё (ксистон)',slot:'weapon',kind:'spear',dmg:23,cd:1.05,range:4.2,stam:9,p:240,tier:2,desc:'Длинное копьё: верхом удерживайте Shift и разгонитесь не менее 0,7 с. Касание наконечником наносит тройной урон.'},
   bow: { name: 'Составной лук', slot: 'weapon', kind: 'bow', dmg: 17, cd: 0.9, range: 60, stam: 5, p: 140, tier: 2, ammo: 'arrow' },
   khopesh: { name: 'Хопеш фараона', slot: 'weapon', kind: 'blade', dmg: 30, cd: 0.65, range: 2.7, stam: 7, p: 900, tier: 4, rare: true },
   falcata: { name: 'Фальката', slot: 'weapon', kind: 'blade', dmg: 28, cd: 0.62, range: 2.6, stam: 7, p: 800, tier: 4, rare: true },
@@ -180,6 +182,7 @@ export const RECIPES = [
   { id: 'g_axe', at: 'ferraria', in: { iron: 2, wood: 2 }, gear: 'axe' },
   { id: 'g_hasta', at: 'ferraria', in: { iron: 1, wood: 3 }, gear: 'hasta' },
   { id: 'g_spatha', at: 'ferraria', in: { iron: 5, leather: 1, silver: 1 }, gear: 'spatha', lvl: 6 },
+  {id:'g_lance',at:'fabrica',in:{plank:3,iron:2,leather:1},gear:'lance',lvl:3},
   { id: 'g_bow', at: 'fabrica', in: { cedar: 3, leather: 1, linen: 1 }, gear: 'bow', lvl: 4 },
   { id: 'g_parma', at: 'fabrica', in: { plank: 3, leather: 1, iron: 1 }, gear: 'parma' },
   { id: 'g_scutum', at: 'ferraria', in: { plank: 4, leather: 2, iron: 2 }, gear: 'scutum', lvl: 5 },
@@ -230,7 +233,7 @@ export const BUILDINGS = {
   via_cross: { name: 'Перекрёсток', pub: true, road: true, multi: true, r: 2.5, len: 4, wid: 4, ports: [[0, 2, 0], [0, -2, Math.PI], [2, 0, Math.PI / 2], [-2, 0, -Math.PI / 2]], cost: { stone: 5 }, desc: 'Перекрёсток 4×4 м: дороги расходятся на четыре стороны.' },
   pons: { name: 'Мост', pub: true, road: true, bridge: true, multi: true, r: 4, len: 24, wid: 4.4, ports: [[0, 12, 0], [0, -12, Math.PI]], cost: { stone: 40, plank: 25 }, desc: 'Горбатый каменный мост 24 м через реку: под высоким сводом проходят лодки. Ставится поперёк русла (сам разворачивается), из вашей сумки.' },
   collegium: { name: 'Торговая гильдия', cat: 'civic', pub: true, r: 10, cost: { plank: 40, brick: 30, stone: 30, marble: 6 }, need: ['macellum'], desc: 'Здесь собирают торговые ящики четырёх сортов. Ящики несут в руках, грузят на корабли и продают торговцам на островах и у истоков рек.' },
-  amphitheatrum: { name: 'Арена', pub: true, r: 46, cost: { stone: 200, brick: 120, marble: 40, plank: 60 }, need: ['macellum'], desc: 'Большая арена: гладиаторские бои, волны противников, поединки и ставки.' },
+  amphitheatrum: { name: 'Арена', pub: true, r: 63, cost: { stone: 200, brick: 120, marble: 40, plank: 60 }, need: ['macellum'], desc: 'Большая арена: гладиаторские бои, волны противников, поединки и ставки.' },
   // городские здания на постоянных местах (их не закладывают — ремонтируют)
   forum_m: { name: 'Форум Мессаны', pub: true, muni: true, r: 36, cost: { stone: 150, marble: 30, plank: 50 }, desc: 'Большой форум на перекрёстке кардо и декуманус: ростры для речей, место голосований, ряды рыночных лавок.' },
   curia: { name: 'Курия (ратуша)', pub: true, muni: true, r: 9, cost: { brick: 40, stone: 40, marble: 10 }, desc: 'Ратуша: здесь платят взнос за новое звание, заседает совет города.' },
@@ -326,7 +329,7 @@ export const HORSES = {
 export const HORSE_ECON = { foalK: 0.1, grow: 3 * 1200, rentK: 0.12, rentTime: 1200, npcK: 0.7, stock: 6, publicRent: ['gnedoy', 'voronoy', 'albus'] };
 export const horseBag = (c) => { if (!c || !c.horseOut) return 0; const h = (c.horses || []).find((x) => x.id === c.horseOut); return h && HORSES[h.kind] ? HORSES[h.kind].bag : 0; };
 export const PUBLIC_ORDER = Object.keys(BUILDINGS).filter((k) => BUILDINGS[k].pub);
-export const cellsOf = type => BUILDINGS[type].cells || Math.max(1, Math.ceil((BUILDINGS[type].r * 1.5) / CELL));
+export const cellsOf = type => (!BUILDINGS[type].pub&&!BUILDINGS[type].muni?plotSize(type,CELL):null)||BUILDINGS[type].cells||Math.max(1,Math.ceil(BUILDINGS[type].r*1.5/CELL));
 
 // ---------- Звания поселенцев (по достоинству) ----------
 export const RANKS = [
@@ -427,7 +430,7 @@ export const ENEMIES = {
   merc_inf: { name: 'Наёмник', faction: 'rome', hp: 140, dmg: 16, speed: 6.0, range: 2.5, cd: 1.0, aggro: 22, xp: 0, armor: 14, gear: { w: 'falcata', off: 'parma', head: 'galea_bronze', body: 'subarmalis' }, human: true },
   merc_sling: { name: 'Наёмный пращник', faction: 'rome', hp: 100, dmg: 14, speed: 5.8, range: 34, cd: 1.7, aggro: 40, xp: 0, armor: 6, ranged: true, gear: { w: 'sling', body: 'subarmalis' }, human: true },
   rom_inf: { name: 'Легионер отряда', faction: 'rome', hp: 150, dmg: 17, speed: 5.8, range: 2.5, cd: 1.0, aggro: 22, xp: 0, armor: 20, gear: { w: 'gladius', off: 'scutum', head: 'galea_iron', body: 'hamata' }, human: true },
-  rom_cav: { name: 'Всадник отряда', faction: 'rome', hp: 170, dmg: 21, speed: 9.5, range: 3.2, cd: 1.1, aggro: 28, xp: 0, armor: 14, gear: { w: 'hasta', off: 'parma', head: 'galea_bronze', body: 'hamata' }, human: true, mounted: true },
+  rom_cav: { name: 'Всадник отряда', faction: 'rome', hp: 170, dmg: 21, speed: 9.5, range: 4.2, cd: 1.1, aggro: 28, xp: 0, armor: 14, gear: { w: 'lance', off: 'parma', head: 'galea_bronze', body: 'hamata' }, human: true, mounted: true },
   rom_arch: { name: 'Лучник отряда', faction: 'rome', hp: 90, dmg: 14, speed: 5.8, range: 38, cd: 1.5, aggro: 40, xp: 0, armor: 6, ranged: true, gear: { w: 'bow', body: 'subarmalis', head: 'pileus' }, human: true },
   rom_art: { name: 'Скорпион (расчёт)', faction: 'rome', hp: 260, dmg: 46, speed: 1.8, range: 62, cd: 3.4, aggro: 64, xp: 0, armor: 10, ranged: true, model: 'scorpio' },
   rom_guard: { name: 'Телохранитель', faction: 'rome', hp: 220, dmg: 19, speed: 6.4, range: 2.5, cd: 0.9, aggro: 20, xp: 0, armor: 22, gear: { w: 'gladius', off: 'scutum', head: 'galea_centurio', body: 'segmentata' }, human: true },
@@ -437,13 +440,13 @@ export const HOSTILE = new Set(['beast', 'barbarian', 'pirate', 'punic', 'robber
 
 // ---------- Корабли ----------
 export const SHIPS = {
-  barca: { name: 'Рыбацкий баркас', cost: { plank: 25, wood: 15, linen: 4 }, speed: 8.5, turn: 1.2, seats: 4, cargo: 400, hp: 260, len: 12, desc: 'Морской баркас с кормовым гарпуном и двумя бортовыми ложементами для тунца. Улов выгружают и несут в гавань.' },
+  barca: { name: 'Рыбацкий баркас', cost: { plank: 25, wood: 15, linen: 4 }, speed: 8.5, turn: 1.2, seats: 4, cargo: 400, hp: 260, len: 12, desc: 'Морской баркас с носовым гарпуном и двумя бортовыми ложементами для тунца. Улов выгружают и несут в гавань.' },
   scapha: { name: 'Лодка (скафа)', cost: { plank: 15, wood: 10 }, speed: 9, turn: 1.4, seats: 2, cargo: 60, hp: 160, len: 5, need: null, desc: 'Быстрая лодка для рыбалки и перевозки двух человек.' },
   corbita: { name: 'Торговая корбита', cost: { plank: 60, wood: 40, linen: 10, iron: 4 }, speed: 8, turn: 0.7, seats: 6, cargo: 600, hp: 450, len: 14, desc: 'Пузатое торговое судно: большой трюм для вывоза ресурсов колоний.' },
   liburna: { name: 'Либурна', cost: { plank: 80, cedar: 20, linen: 12, iron: 12 }, speed: 12, turn: 1.0, seats: 8, cargo: 120, hp: 700, len: 18, ram: 160, rank: 2, desc: 'Лёгкий военный корабль с тараном. Экипаж может стрелять с палубы.' },
   trireme: { name: 'Трирема', cost: { plank: 160, cedar: 50, linen: 25, iron: 30, silver: 4 }, speed: 11.5, turn: 0.75, seats: 12, cargo: 200, hp: 1300, len: 26, ram: 320, rank: 3, desc: 'Флагман флота: огромный таран и много места для воинов.' },
   penteres: { name: 'Пентера (квинквирема)', cost: { plank: 180, cedar: 55, linen: 28, iron: 36, silver: 5 }, speed: 10.5, turn: 0.6, seats: 16, cargo: 260, hp: 2200, len: 32, ram: 480, rank: 3, desc: 'Главный корабль войны с Карфагеном: пять рядов гребцов и «ворон» — мостик для абордажа.' },
-  quadrireme: { name: 'Квадрирема', cost: { plank: 200, cedar: 60, linen: 30, iron: 45, silver: 6 }, scraps: 4, speed: 11, turn: 0.7, seats: 14, cargo: 240, hp: 1900, len: 30, ram: 420, rank: 3, catapult: true, desc: 'Тяжёлый корабль с катапультой на корме (F у руля — выстрел). Нужны 4 лоскута чертежа.' },
+  quadrireme: { name: 'Квадрирема', cost: { plank: 200, cedar: 60, linen: 30, iron: 45, silver: 6 }, scraps: 4, speed: 11, turn: 0.7, seats: 14, cargo: 240, hp: 1900, len: 30, ram: 420, rank: 3, catapult: true, desc: 'Тяжёлый корабль с катапультой на носу (F у руля — выстрел). Нужны 4 лоскута чертежа.' },
 };
 // ящики на борту: лодка 2, торговый 10, военные 4; лучники-рабы на позициях
 for (const [k, n] of Object.entries({ barca: 2, scapha: 2, corbita: 10, liburna: 4, trireme: 4, quadrireme: 4, penteres: 4 })) SHIPS[k].crates = n;
@@ -528,7 +531,7 @@ export const ISLANDS = [
   { id: 'punic', name: 'Коссира (Пантеллерия)', kind: 'punic', x: -1800, z: 860, r: 92, biome: 'rock', volc: 30, desc: 'Передовая база Карфагена. Отсюда выходят флоты в набеги.' },
   { id: 'aegyptus', name: 'Мелита (Мальта)', kind: 'colony', x: 380, z: 1890, r: 100, biome: 'desert', res: 'papyrus', res2: 'linen', desc: 'Сухой остров финикийских купцов: древние храмы и подземный гипогей.' },
   { id: 'murex', name: 'Гавлос (Гоцо)', kind: 'colony', x: 190, z: 1705, r: 58, biome: 'beach', res: 'murex', desc: 'Рифы с мурексом — из него делают пурпур, дороже серебра.' },
-  { id: 'pirata', name: 'Лопадуса (Лампедуза)', kind: 'pirate', x: -1150, z: 1760, r: 62, biome: 'beach', desc: 'Остров киликийских пиратов: частокол, хижины, награбленное. Разгромите логово — пираты на время перестанут выходить в море.' },
+  { id: 'pirata', name: 'Лопадуса (Лампедуза)', kind: 'pirate', x: -1150, z: 1760, r: 62, biome: 'beach', desc: 'Остров киликийских пиратов: частокол, хижины, награбленное. Разгромите логово — пиратские засады на грузы временно прекратятся, но морские патрули останутся.' },
   { id: 'linosa', name: 'Эфуса (Линоза)', kind: 'colony', x: -880, z: 1540, r: 36, biome: 'rock', volc: 22, desc: 'Пёстрый вулканический островок.' },
   { id: 'pachynus', name: 'Остров у Пахина', kind: 'colony', x: 1110, z: 1140, r: 40, biome: 'beach', desc: 'Песчаный остров у южного мыса Сицилии.' },
   // Ионическое море
@@ -596,7 +599,7 @@ export const EVENT_INFO = {
   pirates: { icon: '🏴', name: 'Пираты', when: 'Когда у колонистов есть корабли.', dur: '10 минут', what: 'Киликийские пираты охотятся за кораблями с грузом и таранят их.', todo: 'Держите корабли у причала или потопите пиратов.', reward: 'Добыча, карта сокровищ с потопленного пирата.' },
   rome: { icon: '🦅', name: 'Запрос Рима', when: 'Когда в городе есть форум.', dur: '15 минут', what: 'Рим просит привезти на Форум партию товара.', todo: 'Сдайте товар на Форуме из сумки или со склада.', reward: 'Денарии вам и в казну, расположение Рима, достоинство.' },
   storm: { icon: '⛈', name: 'Шторм', when: 'Случайно.', dur: '≈3 минуты', what: 'Ветер и дождь: корабли идут медленнее, видно хуже.', todo: 'Переждать у берега или плыть осторожно.', reward: '—' },
-  tuna: { icon: '🐟', name: 'Ход тунца', when: 'Случайно.', dur: '6 минут', what: 'У островов идут косяки тунца.', todo: 'Тунца видно у поверхности: H на баркасе — кормовой гарпун, ЛКМ — выстрел, Пробел — подтягивать линь. Улов несут в гавань.', reward: 'Дорогая рыба и трофеи.' },
+  tuna: { icon: '🐟', name: 'Ход тунца', when: 'Случайно.', dur: '6 минут', what: 'У островов идут косяки тунца.', todo: 'Тунца видно у поверхности: H на баркасе — носовой гарпун, ЛКМ — выстрел, Пробел — подтягивать линь. Улов несут в гавань.', reward: 'Дорогая рыба и трофеи.' },
   merchant: { icon: '⛵', name: 'Купцы из Александрии', when: 'Когда в городе есть гавань.', dur: '8 минут', what: 'На рынке появляется редкое снаряжение.', todo: 'Загляните на рынок, пока купцы не уплыли.', reward: 'Редкие вещи за денарии.' },
   inspect: { icon: '🏛', name: 'Инспекция Рима', when: 'Когда построено 4+ общественных здания.', dur: 'мгновенно', what: 'Легат из Рима осматривает колонию.', todo: 'Держите 5+ общественных зданий целыми и без руин.', reward: 'Довольный легат — денарии в казну и расположение Рима; недовольный — расположение падает.' },
   caravan: { icon: '🐂', name: 'Обоз снабжения врага', when: 'Во время похода на вражеский город.', dur: 'пока едет', what: 'Пунийский обоз под охраной едет по дороге к вражескому городу.', todo: 'Перехватите его на дороге и разбейте.', reward: 'Добыча; оборона города снижается.' },
@@ -711,7 +714,7 @@ export const QUEST_TYPES = {
 };
 // сюжет: 264 г. до н. э. — Рим готовится к войне с Сиракузами и Карфагеном за Сицилию
 export const STORY = [
-  { id: 's1', title: 'Арена Мессаны', text: 'Мамертинцы Мессаны позвали Рим на помощь. Город наш, но арена разрушена — восстановите её (руины за стенами).', goal: { build: 'amphitheatrum' }, reward: { den: 150, dig: 25, xp: 200 } },
+  { id: 's1', title: 'Арена Мессаны', text: 'Мамертинцы Мессаны позвали Рим на помощь. Город наш, арена за стенами готова принимать бойцов. Посетите её и подготовьтесь к походу на Тиндариду.', goal: { build: 'amphitheatrum' }, reward: { den: 150, dig: 25, xp: 200 } },
   { id: 's2', title: 'Тиндарида', text: 'Соседняя Тиндарида — в руках Карфагена. Ослабьте её: шпионаж, разграбление пригородов, удар по караванам и торговым кораблям — и возьмите штурмом.', goal: { capture: 'tyndaris' }, reward: { den: 500, dig: 60, xp: 900 } },
   { id: 's3', title: 'Отстроить Тиндариду', text: 'Город наш, но лежит в руинах. Восстановите форум, курию, храм, склады и гавань Тиндариды.', goal: { rebuild: { city: 'tyndaris', types: ['forum', 'curia', 'templum', 'horreum', 'portus'] } }, reward: { den: 600, dig: 70, xp: 1200 } },
   { id: 's4', title: 'Флот Республики', text: 'Сенат требует флот: постройте 8 пентер и 4 триремы (их можно продать Риму или другим гражданам — в зачёт идут построенные).', goal: { fleet: { penteres: 8, trireme: 4 } }, reward: { den: 1200, dig: 120, xp: 2500 } },

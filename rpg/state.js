@@ -117,19 +117,21 @@ export function ensureCities(W) {
       const key = C.id + ':' + i;
       let b = W.buildings.find((x) => x.muni === key && x.type === L.type && !used.has(x));
       if (!b) { let bd = 1e9; for (const x of W.buildings) { if (!x.muni || used.has(x) || x.type !== L.type || !x.muni.startsWith(C.id + ':')) continue; const d = Math.hypot(x.x - L.x, x.z - L.z); if (d < bd) { bd = d; b = x; } } }
-      if (b) { used.add(b); b.muni = key; b.x = L.x; b.z = L.z; b.ry = L.ry; if(L.guildRelocated)b.guildRelocated=true; b.enemy = st.owner !== 'rome'; if (L.cls != null) b.cls = L.cls; return; }
+      if (b) { if(C.id==='messana'&&b.type==='amphitheatrum'){b.built=true;b.ruined=false;b.hp=b.maxHp;b.prog={...b.cost};} used.add(b); b.muni = key; b.x = L.x; b.z = L.z; b.ry = L.ry; if(L.guildRelocated)b.guildRelocated=true; b.enemy = st.owner !== 'rome'; if (L.cls != null) b.cls = L.cls; return; }
       const def = D.BUILDINGS[L.type]; if (!def) return;
       const cost = { ...def.cost }, tot = Object.values(cost).reduce((a, n) => a + n, 0);
-      const roman = st.owner === 'rome', ruin = roman && (C.id !== 'messana' || L.type === 'amphitheatrum');
+      const roman = st.owner === 'rome', ruin = roman && C.id !== 'messana';
       b = { id: nid(), type: L.type, x: L.x, z: L.z, ry: L.ry, owner: null, ownerName: null, built: !ruin, prog: ruin ? {} : { ...cost }, cost, hp: ruin ? 0 : tot * 10, maxHp: tot * 10, ruined: false, store: {}, slaves: [], level: 1, lastProd: Date.now() / 1000, contrib: {}, island: 'main', placed: Date.now(), done: Date.now(), muni: key, city: C.id, enemy: !roman };
       if (L.cls != null) b.cls = L.cls; if(L.guildRelocated)b.guildRelocated=true;
       W.buildings.push(b); used.add(b);
     });
     W.buildings = W.buildings.filter((x) => !x.muni || !x.muni.startsWith(C.id + ':') || used.has(x)); // лишние (больше нет в планировке) — убираем
   }
+  W.buildings=W.buildings.filter(b=>b.type!=='amphitheatrum'||(b.muni&&['messana','syracusae'].includes(b.city)));
   WG.setMuniFootprints(G.world.cities);
   WG.setCityRoadCells(W.buildings);
   arrangeCityAdditions(W,G.world.cities);
+  WG.protectEstates(G.world,W.cityState,W.buildings);
   // городские здания, которых больше нет в планировке, убираются
   // ресурсы под городскими зданиями и улицами вырублены
   for (const b of W.buildings) { if (!b.muni) continue; const r = (D.BUILDINGS[b.type] || {}).r || 4; for (const n of G.world.nodes) if (Math.abs(n.x - b.x) < r + 1 && Math.abs(n.z - b.z) < r + 1 && Math.hypot(n.x - b.x, n.z - b.z) < r + 0.8) W.nodes[n.id] = { a: 0, t: -1 }; }

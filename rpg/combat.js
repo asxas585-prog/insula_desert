@@ -1,3 +1,5 @@
+import {prepareProjectileObstacles,projectileBlocked} from './projectiles.js';
+import { RANGED, rangedProfile } from '../public/rpg/ranged.js';
 import { hasCityOffice, cityOf } from './access.js';
 // Существа, их ИИ, бой, снаряды, добыча, опыт
 import { G, D, WG, now, dist, rand, randi, pick, nid, angDiff, send, broadcast, log, fx, chronicle, addRes, addGear, gearArmor, derivedOf, rankOf, bagFree, hasOffice, lawsAt } from './state.js';
@@ -60,7 +62,7 @@ const inWater = (x, z) => WG.terrainHeight(x, z) < -0.6;
 function mobGround(m, x, z) {
   if (m.watch && Math.hypot(x - m.watch.x, z - m.watch.z) > m.watch.R - 2) return false;
   if (m.inst) { const I = G.instances.get(m.inst); return !I || I.walkable(x, z); }
-  if (m.arena) { const a = m.arena; return ((x - a.x) / a.rx) ** 2 + ((z - a.z) / a.rz) ** 2 < 1; }
+  if (m.arena) { const a=m.arena,c=Math.cos(a.ry||0),s=Math.sin(a.ry||0),dx=x-a.x,dz=z-a.z;return ((dx*c-dz*s)/a.rx)**2+((dx*s+dz*c)/a.rz)**2<1; }
   if (m.def.model === 'croc') return WG.terrainHeight(x, z) > -6; // крокодил плавает по рекам и озёрам
   if (inWater(x, z) && WG.deckHeight(x, z, G.W.buildings) == null) return false; // в воду не лезут, по мостам — можно
   // стены, акведуки, деревья, камни и здания — препятствие (цель набега не мешает подойти вплотную)
@@ -103,7 +105,7 @@ function moveMob(m, tx, tz, speed, dt) {
     const a = ang + off, nx = m.x + Math.sin(a) * step, nz = m.z + Math.cos(a) * step;
     if (!mobGround(m, nx, nz)) continue;
     if (off !== 0) { m.side = Math.sign(off); m.detourUntil = t + 1.6; m.detourT = (m.detourT || 0) + dt; if (m.detourT > 1.0) plan(); } else if (!m.nav) m.detourT = Math.max(0, (m.detourT || 0) - dt);
-    m.x = nx; m.z = nz; m.ry = a; m.stuck = 0;
+    m.lastStepSpeed=step/dt;m.lastStepAt=t; m.x = nx; m.z = nz; m.ry = a; m.stuck = 0;
     return step;
   }
   m.stuck = (m.stuck || 0) + dt; m.side = -sd; m.detourUntil = t + 1.6;
@@ -125,33 +127,40 @@ function separate(list) { // расталкивание по сетке 2 м (н
       } }
   }
 }
+const engagement=new Map();
+export function canEngage(m,target){const set=engagement.get(target.id);return !set||set.has(m.id)||set.size<2;}
+function reserveEngagement(m,target){if(!canEngage(m,target))return false;let set=engagement.get(target.id);if(!set)engagement.set(target.id,set=new Set());set.add(m.id);return true;}
+function engagementTick(){
+ engagement.clear();const ordered=[...G.mobs.values()].filter(m=>m.hp>0&&m.target?.kind==='mob').sort((a,b)=>(b.state==='wind')-(a.state==='wind')||dist(a,tgtEnt(a.target)||a)-dist(b,tgtEnt(b.target)||b)||a.id-b.id);
+ for(const m of ordered){const target=tgtEnt(m.target);if(!target||target.hp<=0||!reserveEngagement(m,target)){m.target=null;m.retarget=0;if(m.state==='wind')m.state='chase';}}
+}
 // цель: игрок / союзный легионер / вражеский моб
 function findTarget(m) {
   let best = null, bd = m.def.aggro || 0;
   if (!bd) return null;
   if (m.team) { // Поле Марса: враги — только чужая сторона того же боя
     bd = Math.max(bd, 45);
-    for (const q of G.mobs.values()) if (q.hp > 0 && q.team && q.war === m.war && q.team !== m.team) { const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+    for (const q of G.mobs.values()) if (q.hp > 0 && q.team && q.war === m.war && q.team !== m.team) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
     for (const p of G.players.values()) if (p.alive && p.war && p.war.lid === m.war && p.war.team !== m.team) { const d = dist(m, p); if (d < bd) { bd = d; best = { kind: 'p', id: p.id }; } }
     return best;
   }
   if (m.ffa) { // Великие игры: все против всех
-    let fd = 1e9; for (const q of G.mobs.values()) if (q !== m && q.hp > 0 && q.ffa === m.ffa) { const d = dist(m, q); if (d < fd) { fd = d; best = { kind: 'mob', id: q.id }; } }
+    let fd = 1e9; for (const q of G.mobs.values()) if (q !== m && q.hp > 0 && q.ffa === m.ffa) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < fd) { fd = d; best = { kind: 'mob', id: q.id }; } }
     return best;
   }
   if (m.arena) { // на арене: свои бойцы (раб, лев) против гладиаторов арены; гладиаторы — ещё и против игроков-бойцов
     const mine = m.faction === 'rome';
-    for (const q of G.mobs.values()) if (q.hp > 0 && q.arena && !q.kneel && (mine ? q.faction !== 'rome' : q.faction === 'rome')) { const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+    for (const q of G.mobs.values()) if (q.hp > 0 && q.arena && !q.kneel && (mine ? q.faction !== 'rome' : q.faction === 'rome')) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
     if (!mine) for (const p of G.players.values()) if (p.alive && G.arena && G.arena.fighters.has(p.id)) { const d = dist(m, p); if (d < bd) { bd = d; best = { kind: 'p', id: p.id }; } }
     return best;
   }
   if (m.faction === 'rome') {
     if (m.watch) { // дозорные: любой враг у своего города — бегут навстречу
       const W0 = m.watch; bd = 1e9;
-      for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && !q.inst && !q.war && Math.hypot(q.x - W0.x, q.z - W0.z) < W0.R + 25 && (!W0.forum || Math.hypot(q.x - W0.fx, q.z - W0.fz) < W0.fr + 12)) { const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+      for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && !q.inst && !q.war && Math.hypot(q.x - W0.x, q.z - W0.z) < W0.R + 25 && (!W0.forum || Math.hypot(q.x - W0.fx, q.z - W0.fz) < W0.fr + 12)) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
       return best;
     }
-    for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && q.inst === m.inst) { const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+    for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
     return best;
   }
   for (const p of G.players.values()) {
@@ -162,7 +171,7 @@ function findTarget(m) {
     if (p.ship) d += 8;
     if (d < bd) { bd = d; best = { kind: 'p', id: p.id }; }
   }
-  if (!m.arena) for (const q of G.mobs.values()) if (q.hp > 0 && q.faction === 'rome' && q.inst === m.inst) { const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+  if (!m.arena) for (const q of G.mobs.values()) if (q.hp > 0 && q.faction === 'rome' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
   return best;
 }
 const tgtEnt = (t) => !t ? null : t.kind === 'p' ? G.players.get(t.id) : G.mobs.get(t.id);
@@ -170,7 +179,7 @@ const tgtAlive = (e, t) => e && (t.kind === 'p' ? e.alive : e.hp > 0);
 
 function mobAttackResolve(m) {
   const t = tgtEnt(m.target);
-  if (!t || !tgtAlive(t, m.target)) return;
+  if (!t || !tgtAlive(t, m.target)||m.target.kind==='mob'&&!canEngage(m,t)) return;
   m.y = m.inst ? (G.instances.get(m.inst)?.y0 || 60) : Math.max(0, WG.deckHeight(m.x, m.z, G.W.buildings) ?? WG.terrainHeight(m.x, m.z));
   const d = dist(m, t);
   if (m.def.ranged) {
@@ -180,12 +189,13 @@ function mobAttackResolve(m) {
   const facing = Math.abs(angDiff(Math.atan2(t.x - m.x, t.z - m.z), m.ry));
   if (d > (m.def.range || 2) + 0.9 || facing > 1.3) { fx({ kind: 'whiff', x: m.x, z: m.z }); return; }
   if (m.target.kind === 'p' && !m.inst && (t.y || 0) - Math.max(0, WG.terrainHeight(t.x, t.z)) > 4) { fx({ kind: 'whiff', x: m.x, z: m.z }); return; } // на башне мечом не достать
-  if (m.target.kind === 'p') damagePlayer(t, m.dmg * rand(0.9, 1.1), m);
-  else hitMob(t, m.dmg * rand(0.9, 1.1), null, m);
+  const charge=m.def.mounted&&m.def.gear?.w==='lance'&&(m.chargeSecs||0)>=.7?3:1;m.chargeSecs=0;
+  if (m.target.kind === 'p') damagePlayer(t, m.dmg *charge* rand(0.9, 1.1), m);
+  else hitMob(t, m.dmg *charge* rand(0.9, 1.1), null, m);
 }
 
 export function updateMobs(dt) {
-  const t = now(); navBudget(); NAV.navTick(t);
+  const t = now(); navBudget(); NAV.navTick(t);engagementTick();
   const actives = [];
   for (const m of G.mobs.values()) {
     if (m.hp <= 0) { if (t - m.deadAt > (m.def.tameable && !m.tamedTry ? 45 : 8)) G.mobs.delete(m.id); continue; }
@@ -210,6 +220,7 @@ export function updateMobs(dt) {
       continue;
     }
     if (m.stun > t) continue;
+    if(m.arena&&m.exchangeAt!=null&&t-m.exchangeAt>=4)m.state='chase';
     if (m.state === 'wind') {
       if (t >= m.windEnd) { m.state = 'chase'; mobAttackResolve(m); m.atkAt = t + (def.cd || 1.2); }
       continue;
@@ -231,11 +242,11 @@ export function updateMobs(dt) {
     if (m.squad && m.squad.sq !== 'guard') { // отряд держит строй: бьёт только тех, кто рядом со своим местом; по приказу — цель отряда
       const sl = squadSlotFn(m);
       if (sl) {
-        if (sl.focus) { const fo = G.mobs.get(sl.focus); if (fo && fo.hp > 0 && dist(m, fo) < (def.ranged ? (def.range || 30) : 9)) m.target = { kind: 'mob', id: fo.id }; }
-        const t0 = tgtEnt(m.target); if (t0 && Math.hypot(t0.x - sl.x, t0.z - sl.z) > (def.ranged ? (def.range || 30) + 2 : 7)) m.target = null;
+        if (sl.focus) { const fo = G.mobs.get(sl.focus); if (fo && fo.hp > 0 && canEngage(m,fo) && dist(m, fo) < (def.ranged ? (def.range || 30) : 9)) m.target = { kind: 'mob', id: fo.id }; }
+        const t0 = tgtEnt(m.target); if (t0 && Math.hypot(t0.x - sl.x, t0.z - sl.z) > (def.ranged ? (def.range || 30) + 2 : sl.sq?.mode==='attack'?18:7)) m.target = null;
       }
     }
-    const tg = tgtEnt(m.target);
+    let tg = tgtEnt(m.target);if(tg&&m.target.kind==='mob'&&!reserveEngagement(m,tg)){m.target=null;tg=null;}
     if (m.target && (!tg || !tgtAlive(tg, m.target) || tg.inst !== m.inst || dist(m, tg) > (def.aggro || 20) * 2.2)) m.target = null;
     // отступление к логову
     if (m.target && m.drink) { m.drink = null; m.drinking = false; }
@@ -243,22 +254,24 @@ export function updateMobs(dt) {
     if (m.returning) { moveMob(m, m.home.x, m.home.z, def.speed, dt); m.moving = 2; m.hp = Math.min(m.maxHp, m.hp + m.maxHp * 0.1 * dt); if (dist(m, m.home) < 4) m.returning = false; continue; }
     if (m.target && tg) {
       const d = dist(m, tg), range = def.range || 2;
-      const want = def.ranged ? range * 0.82 : range * 0.85;
+      const want = def.ranged ? range * 0.82 : range * .95;
+      if(m.arena&&!def.ranged){
+       if(d>range+2&&!m.breakPoint)m.exchangeAt=null;
+       if(!m.skillAt)m.skillAt=t+rand(3,7);
+       if(!m.breakPoint&&t>m.skillAt&&d<4.6&&(m.exchangeAt==null||t-m.exchangeAt<4)){m.skillAt=t+rand(6,11);arenaSkill(m,tg,t);}
+       if(m.breakPoint){const bp=m.breakPoint;moveMob(m,bp.x,bp.z,def.speed,dt);m.moving=1;m.ry=Math.atan2(tg.x-m.x,tg.z-m.z);if(Math.hypot(m.x-bp.x,m.z-bp.z)<.4||t>m.breakDeadline){m.breakPoint=null;m.exchangeAt=null;}continue;}
+       if(d<=range+.9){m.exchangeAt??=t;if(t-m.exchangeAt>=4){let a=Math.atan2(m.x-tg.x,m.z-tg.z),point=null;for(const off of [0,.4,-.4,.8,-.8,1.2,-1.2,Math.PI]){const x=m.x+Math.sin(a+off)*6,z=m.z+Math.cos(a+off)*6;if(mobGround(m,x,z)){point={x,z};break;}}if(point){m.breakPoint=point;m.breakDeadline=t+5;m.exchangeAt=null;continue;}}}
+      }
+      if(def.mounted){const turn=Math.abs(angDiff(m.ry,m.chargeHeading??m.ry));m.chargeHeading=m.ry;if(d>range+1){m.chargeSecs=m.lastStepSpeed>=7&&t-(m.lastStepAt||0)<.2&&turn<dt*1.1?(m.chargeSecs||0)+dt:0;m.chargeAt=t;}else if(t-(m.chargeAt||0)>1.5)m.chargeSecs=0;}
+
       m.ry = Math.atan2(tg.x - m.x, tg.z - m.z);
       if (def.ranged && d < 6) { // лучники держат дистанцию
         const a = Math.atan2(m.x - tg.x, m.z - tg.z); moveMob(m, m.x + Math.sin(a) * 4, m.z + Math.cos(a) * 4, def.speed * 0.8, dt); m.moving = 1;
         m.ry = Math.atan2(tg.x - m.x, tg.z - m.z);
       } else if (d > want) { moveMob(m, tg.x, tg.z, m.speed * (d > 12 ? 1 : 0.75), dt); m.moving = d > 12 ? 2 : 1; }
-      else if (m.arena) { // на арене бойцы кружат вокруг соперника, отскакивают после удара, применяют приёмы своего класса
-        if (!m.skillAt) m.skillAt = t + rand(3, 7);
-        if (t > m.skillAt && d < 4.6) { m.skillAt = t + rand(6, 11); arenaSkill(m, tg, t); }
-        if ((m.backUntil || 0) > t) { const a = Math.atan2(m.x - tg.x, m.z - tg.z); moveMob(m, m.x + Math.sin(a) * 5, m.z + Math.cos(a) * 5, def.speed * 0.9, dt); m.moving = 1; m.ry = Math.atan2(tg.x - m.x, tg.z - m.z); continue; }
-        if (Math.random() < dt * 0.1) m.backUntil = t + rand(1.0, 2.0); // иногда расходятся, чтобы снова сойтись
-        m.circ = m.circ || (m.id % 2 ? 1 : -1); if (Math.random() < dt * 0.25) m.circ = -m.circ;
-        const a0 = Math.atan2(m.x - tg.x, m.z - tg.z) + m.circ * 0.9 * dt * 2, rr = Math.max(want * 0.9, (t - (m.lastSwing || 0) < 0.8 ? want + 1.6 : want));
-        moveMob(m, tg.x + Math.sin(a0) * rr, tg.z + Math.cos(a0) * rr, def.speed * 0.55, dt); m.moving = 1;
-        m.ry = Math.atan2(tg.x - m.x, tg.z - m.z);
-      } else m.moving = 0;
+      else {m.moving=0;m.nav=null;}
+      // Face the enemy after movement; navigation must not turn a cavalry attack sideways.
+      m.ry=Math.atan2(tg.x-m.x,tg.z-m.z);
       if (d <= range + 0.3 && t >= m.atkAt) { m.lastSwing = t; m.state = 'wind'; m.windEnd = t + (def.boss ? 0.75 : def.ranged ? 0.6 : 0.5); m.windStart = t; m.moving = 0; m.ry = Math.atan2(tg.x - m.x, tg.z - m.z); }
       continue;
     }
@@ -293,7 +306,7 @@ const SKILLS = {
 function arenaSkill(m, tg, t) {
   const sk = SKILLS[m.type]; if (!sk) return;
   const [name, kind, stun, mul] = sk, dmg = m.dmg * mul;
-  const hit = (e) => { if (e.char) damagePlayer(e, dmg, m); else { hitMob(e, dmg, null, m); if (stun) e.stun = t + stun; } };
+  const hit = (e) => { if(!e.char&&!reserveEngagement(m,e))return; if (e.char) damagePlayer(e, dmg, m); else { hitMob(e, dmg, null, m); if (stun) e.stun = t + stun; } };
   if (kind === 'leap') { const a = Math.atan2(tg.x - m.x, tg.z - m.z), dd = Math.max(0, dist(m, tg) - 1.4); m.x += Math.sin(a) * dd; m.z += Math.cos(a) * dd; }
   if (kind === 'area') { for (const o of G.mobs.values()) if (o !== m && o.arena && o.hp > 0 && o.faction !== m.faction && dist(o, m) < 3.4) hit(o); for (const q of G.players.values()) if (q.alive && G.arena && G.arena.fighters.has(q.id) && dist(q, m) < 3.4 && m.faction !== 'rome') hit(q); }
   else hit(tg);
@@ -454,7 +467,7 @@ export function playerAttack(p, m) {
   const der = derivedOf(c);
   if (t < (p.atkReady || 0) - 0.08) return;
   if (w.kind === 'bow') return playerShoot(p, m, w, q);
-  if (w.kind === 'rod') return;
+  if (w.kind === 'rod'||p.ranged) return;
   if (p.st < w.stam * 0.5) { send(p, { type: 'tired' }); return; }
   p.st -= w.stam; p.lastSt = t;
   const combo = Math.max(0, Math.min(2, m.combo | 0));
@@ -498,65 +511,57 @@ export function resolvePendingHits() {
     }
   }
 }
-function aimDir(p, m, range, grav) {
-  // точка под прицелом от клиента: стреляем точно в неё (враг рядом с точкой — подстраиваемся под него)
-  if (Array.isArray(m.aim) && m.aim.every((v) => isFinite(Number(v)))) {
-    const ax = Number(m.aim[0]), ay = Number(m.aim[1]), az = Number(m.aim[2]);
-    const d = Math.hypot(ax - p.x, az - p.z);
-    if (d > 1.5 && d < range * 1.6) {
-      let best = null, bd = 2.2;
-      for (const q of G.mobs.values()) { if (q.hp <= 0 || q.inst !== p.inst || q.faction === 'rome') continue; const dd = Math.hypot(q.x - ax, q.z - az); if (dd < bd) { bd = dd; best = q; } }
-      for (const e of G.eships.values()) { const dd = Math.hypot(e.x - ax, e.z - az); if (dd < 7 && dd < bd + 5) { best = e; bd = dd; } }
-      return { ry: Math.atan2((best ? best.x : ax) - p.x, (best ? best.z : az) - p.z), pitch: 0, target: best || { x: ax, z: az, y: ay - 1.1 } };
-    }
-  }
-  // помощь в прицеливании: ближайший враг в узком конусе
-  const ry = Number(m.ry) || p.ry, pitch = Math.max(-0.6, Math.min(0.9, Number(m.pitch) || 0));
-  let best = null, bs = 0.16;
-  for (const q of G.mobs.values()) {
-    if (q.hp <= 0 || q.inst !== p.inst || q.faction === 'rome' || q.faction === 'prey' && false) continue;
-    const d = dist(p, q); if (d > range || d < 1) continue;
-    const da = Math.abs(angDiff(Math.atan2(q.x - p.x, q.z - p.z), ry));
-    if (da < bs) { bs = da; best = q; }
-  }
-  for (const e of G.eships.values()) {
-    const d = dist(p, e); if (d > range) continue;
-    const da = Math.abs(angDiff(Math.atan2(e.x - p.x, e.z - p.z), ry));
-    if (da < bs) { bs = da; best = e; }
-  }
-  return { ry: best ? Math.atan2(best.x - p.x, best.z - p.z) : ry, pitch, target: best };
+export function rangedStart(p,m){
+ const kind=m.kind,d=RANGED[kind],c=p.char;
+ if(!['bow','pilum'].includes(kind)||!d||!p.alive||c.carry||c.tunaCarry||p.block||p.swim||p.gathering?.until>now()||now()<(p.atkReady||0))return;
+ if(kind==='bow'&&GEAR[c.gear.weapon?.k]?.kind!=='bow')return;
+ if((c.bag[kind==='bow'?'arrow':'pilum']||0)<1||p.st<d.stamina)return;
+ if(p.ranged)return;
+ p.ranged={kind,at:now(),weapon:c.gear.weapon?.k,position:{x:p.x,z:p.z}};
 }
-function playerShoot(p, m, w, q) {
-  const c = p.char, t = now();
-  if ((c.bag.arrow || 0) <= 0) { send(p, { type: 'log', text: 'Нет стрел. Их делают в Мастерской или покупают на рынке.', kind: 'warn' }); return; }
-  const der = derivedOf(c);
-  p.atkReady = t + w.cd / der.atkSpeed; p.st -= w.stam;
-  c.bag.arrow--; if (!c.bag.arrow) delete c.bag.arrow; p.dirtyChar = true;
-  const a = aimDir(p, m, w.range, 0.5);
-  p.ry = a.ry; p.lastAtk = { t, kind: 'bow', combo: 0 };
-  shoot({ x: p.x, z: p.z, y: (p.y || 0) + 1.5, kind: 'arrow', owner: p.id, side: 'player', dmg: w.dmg * q * der.ranged, inst: p.inst, ry: a.ry, pitch: a.pitch, target: a.target, delay: 0.25 / der.atkSpeed });
+export function rangedCancel(p){p.ranged=null;}
+function releaseRanged(p,m,kind,w,q=1){
+ const t=now(),h=p.ranged,c=p.char,d=RANGED[kind];p.ranged=null;
+ if(!h||h.kind!==kind||h.weapon!==c.gear.weapon?.k||!p.alive||c.carry||c.tunaCarry||p.block||p.swim||t<(p.atkReady||0)||p.st<d.stamina||t-h.at<d.min||t-h.at>12)return;
+ const ammo=kind==='bow'?'arrow':'pilum';if(!(c.bag[ammo]>0))return;
+ if(!Array.isArray(m.dir)||m.dir.length!==3||!m.dir.every(Number.isFinite))return;
+ let [dx,dy,dz]=m.dir;const len=Math.hypot(dx,dy,dz);if(len<.99||len>1.01)return;dx/=len;dy/=len;dz/=len;
+ const profile=rangedProfile(kind,t-h.at,{speed:p.moveSpeed||0,running:p.run,mounted:p.mounted,stamina:p.st/derivedOf(c).maxSt});
+ // Spread rotates a free ray. No lock-on, moving target prediction or automatic ballistic correction.
+ const yaw=Math.atan2(dx,dz)+(Math.random()*2-1)*profile.spread,pitch=Math.max(-1.45,Math.min(1.45,Math.asin(dy)+(Math.random()*2-1)*profile.spread));
+ const der=derivedOf(c);c.bag[ammo]--;if(!c.bag[ammo])delete c.bag[ammo];p.dirtyChar=true;
+ p.st-=d.stamina;p.lastSt=t;p.atkReady=t+(kind==='bow'?.65:.85)/der.atkSpeed;p.ry=yaw;
+ p.lastAtk={t:t-(kind==='bow'?.5:.495),kind:kind==='bow'?'bow':'throw',combo:0};
+ shoot({x:p.x,z:p.z,y:(p.y||0)+(kind==='bow'?1.5:1.8),kind:ammo,owner:p.id,side:'player',dmg:(w?.dmg||34)*q*der.ranged*profile.damage,inst:p.inst,ry:yaw,pitch,speed:profile.speed,physical:true});
+ send(p,{type:'rangedReleased',kind,power:profile.power});
 }
-export function playerThrow(p, m) {
-  const c = p.char, t = now();
-  if (!p.alive || (c.bag.pilum || 0) <= 0 || t < (p.atkReady || 0)) return;
-  if (p.st < 10) return;
-  const der = derivedOf(c);
-  c.bag.pilum--; if (!c.bag.pilum) delete c.bag.pilum; p.dirtyChar = true;
-  p.st -= 10; p.atkReady = t + 1.0;
-  const a = aimDir(p, m, 30, 1);
-  p.ry = a.ry; p.lastAtk = { t, kind: 'throw', combo: 0 };
-  shoot({ x: p.x, z: p.z, y: (p.y || 0) + 1.8, kind: 'pilum', owner: p.id, side: 'player', dmg: 34 * der.ranged, inst: p.inst, ry: a.ry, pitch: a.pitch, target: a.target, delay: 0.3 });
+function playerShoot(p,m,w,q){return releaseRanged(p,m,'bow',w,q);}
+export function playerThrow(p,m){return releaseRanged(p,m,'pilum');}
+export function lanceTick(dt){
+ for(const p of G.players.values()){
+  const t=now(),c=p.char,heading=p.ry,turn=Math.abs(angDiff(heading,p.lanceHeading??heading));p.lanceHeading=heading;
+  if(!p.alive||!p.mounted||!p.run||p.block||p.ship||p.inst||c.gear.weapon?.k!=='lance'||c.carry||c.tunaCarry||p.moveSpeed<7||t-p.lastMv>.3||turn>dt*1.1||p.st<9){p.lanceCharge=0;continue;}
+  p.lanceCharge=(p.lanceCharge||0)+dt;if(p.lanceCharge<.7||t<(p.lanceReady||0))continue;
+  const end={x:p.x+Math.sin(heading)*4.2,z:p.z+Math.cos(heading)*4.2},pr={px:p.x,pz:p.z,py:(p.y||0)+1.5,x:end.x,z:end.z,y:(p.y||0)+1.5};
+  const candidates=[...G.mobs.values()].filter(m=>m.hp>0&&!m.kneel&&m.inst===p.inst&&(m.team?p.war?.lid===m.war&&p.war.team!==m.team:m.faction!=='rome')&&projectileHits(pr,m,.65,2.6)).sort((a,b)=>dist(p,a)-dist(p,b));
+  for(const q of G.players.values())if(q!==p&&q.alive&&q.inst===p.inst&&((p.pvp&&q.pvp)||(p.war&&q.war&&p.war.lid===q.war.lid&&p.war.team!==q.war.team))&&projectileHits(pr,q,.6,2.6))candidates.push(q);candidates.sort((a,b)=>dist(p,a)-dist(p,b));
+  const target=candidates[0];if(target){const dmg=GEAR.lance.dmg*QUALITY[c.gear.weapon.q||0].mul*derivedOf(c).melee*3;if(target.char)damagePlayer(target,dmg*.7,p);else hitMob(target,dmg,p,null,{knock:true,stagger:true});p.st-=9;p.lastSt=t;p.lanceReady=t+1.5;p.lanceCharge=0;send(p,{type:'log',text:'Кавалерийский удар копьём ×3!',kind:'good'});}
+ }
 }
+export function rangedTick(dt){for(const p of G.players.values())if(p.ranged){
+ const h=p.ranged;if(!p.alive||p.swim||p.block||p.char.carry||p.char.tunaCarry||p.char.gear.weapon?.k!==h.weapon||now()-h.at>12){rangedCancel(p);continue;}
+ p.st=Math.max(0,p.st-dt*(h.kind==='bow'?2:1));p.lastSt=now();if(p.st<RANGED[h.kind].stamina){rangedCancel(p);send(p,{type:'rangedCancelled'});}
+}}
 // снаряд: летит баллистически; если есть цель — выставляем угол, чтобы долететь
 export function shoot(o) {
-  const speed = o.kind === 'bolt' ? 62 : o.kind === 'arrow' ? 46 : o.kind === 'pilum' ? 28 : 34, g = o.kind === 'bolt' ? 5 : o.kind === 'arrow' ? 9 : 12;
+  const speed = o.speed ?? (o.kind === 'bolt' ? 62 : o.kind === 'arrow' ? 46 : o.kind === 'pilum' ? 28 : 34), g = o.kind === 'bolt' ? 5 : o.kind === 'arrow' ? 9 : 12;
   let ry = o.ry, vy;
-  let horiz = speed;
+  let horiz = o.physical ? Math.cos(o.pitch||0)*speed : speed;
   if (o.target) {
     const tx = o.target.x, tz = o.target.z, d = Math.hypot(tx - o.x, tz - o.z);
     ry = Math.atan2(tx - o.x, tz - o.z);
     const tt = Math.max(0.04, d / speed); vy = (((o.target.y || 0) + 1.1 - o.y) / tt) + 0.5 * g * tt;
-  } else vy = Math.sin(o.pitch || 0) * speed + 2;
+  } else vy = Math.sin(o.pitch || 0) * speed + (o.physical?0:2);
   const pr = { id: nid(), kind: o.kind, x: o.x, y: o.y, z: o.z, vx: Math.sin(ry) * horiz, vz: Math.cos(ry) * horiz, vy, g, owner: o.owner, side: o.side, war: o.war, dmg: o.dmg, inst: o.inst, born: now() + (o.delay || 0), life: 3 };
   G.proj.set(pr.id, pr);
 }
@@ -567,25 +572,28 @@ export function projectileHits(pr, target, radius, height) {
   return Math.hypot(target.x - ax - dx * k, target.z - az - dz * k) <= radius && y >= base - .1 && y <= base + height;
 }
 export function updateProj(dt) {
-  const t = now();
+  const t = now();if(G.proj.size)prepareProjectileObstacles();
   for (const pr of G.proj.values()) {
     if (t < pr.born) continue;
     pr.px = pr.x; pr.py = pr.y; pr.pz = pr.z;
     pr.x += pr.vx * dt; pr.z += pr.vz * dt; pr.vy -= pr.g * dt; pr.y += pr.vy * dt;
     if (t - pr.born > pr.life) { G.proj.delete(pr.id); continue; }
+    let blocked=false;
+    if(!pr.inst){const steps=Math.max(1,Math.ceil(Math.hypot(pr.x-pr.px,pr.z-pr.pz)/.4));for(let k=1;k<=steps;k++){const f=k/steps,x=pr.px+(pr.x-pr.px)*f,z=pr.pz+(pr.z-pr.pz)*f,y=pr.py+(pr.y-pr.py)*f;if(projectileBlocked(x,y,z)||y<Math.max(-.5,WG.terrainHeight(x,z))){pr.x=x;pr.y=y;pr.z=z;blocked=true;break;}}}
     const ground = pr.inst ? (G.instances.get(pr.inst)?.y0 || 0) : Math.max(-0.5, WG.terrainHeight(pr.x, pr.z));
+    const targets=[...G.mobs.values()].filter(m=>m.hp>0&&m.inst===pr.inst&&projectileHits(pr,m,m.def.boss?1.8:.9,2.6)).sort((a,b)=>Math.hypot(a.x-pr.px,a.z-pr.pz)-Math.hypot(b.x-pr.px,b.z-pr.pz));
     let hit = false;
     if (pr.side && pr.side.startsWith('team')) { // стрелы армий Поля Марса
       const tm = pr.side.slice(4);
-      for (const m of G.mobs.values()) { if (m.hp <= 0 || !m.team || m.team === tm || m.war !== pr.war) continue; if (projectileHits(pr, m, .9, 2.6)) { hitMob(m, pr.dmg, null, G.mobs.get(pr.owner)); hit = true; break; } }
+      for (const m of targets) { if (m.hp <= 0 || !m.team || m.team === tm || m.war !== pr.war) continue; if (projectileHits(pr, m, .9, 2.6)) { hitMob(m, pr.dmg, null, G.mobs.get(pr.owner)); hit = true; break; } }
       if (!hit) for (const p of G.players.values()) { if (!p.alive || !p.war || p.war.lid !== pr.war || p.war.team === tm) continue; if (projectileHits(pr, p, .7, 2.2)) { damagePlayer(p, pr.dmg, { x: pr.x - pr.vx * 0.1, z: pr.z - pr.vz * 0.1 }); hit = true; break; } }
     } else if (pr.side === 'ally') {
-      for (const m of G.mobs.values()) {
+      for (const m of targets) {
         if (m.hp <= 0 || m.inst !== pr.inst || !D.HOSTILE.has(m.faction) || m.kneel || m.war) continue;
         if (projectileHits(pr, m, m.def.boss ? 1.8 : .9, 2.6)) { hitMob(m, pr.dmg, null, G.mobs.get(pr.owner)); hit = true; break; }
       }
     } else if (pr.side === 'player') {
-      for (const m of G.mobs.values()) {
+      for (const m of targets) {
         const shw = G.players.get(pr.owner);
         if (m.hp <= 0 || m.inst !== pr.inst || (m.team ? !(shw && shw.war && shw.war.lid === m.war && shw.war.team !== m.team) : m.faction === 'rome')) continue;
         const r = m.def.boss ? 1.8 : 0.9;
@@ -607,12 +615,12 @@ export function updateProj(dt) {
         if (!p.alive || p.inst !== pr.inst) continue;
         if (projectileHits(pr, p, .7, 2.2)) { damagePlayer(p, pr.dmg, { x: pr.x - pr.vx * 0.1, z: pr.z - pr.vz * 0.1 }); hit = true; break; }
       }
-      if (!hit) for (const m of G.mobs.values()) {
+      if (!hit) for (const m of targets) {
         if (m.hp <= 0 || m.faction !== 'rome' || m.inst !== pr.inst) continue;
         if (projectileHits(pr, m, .8, 2.6)) { hitMob(m, pr.dmg, null, G.mobs.get(pr.owner)); hit = true; break; }
       }
     }
-    if (hit || pr.y < ground) { G.proj.delete(pr.id); if (!hit) fx({ kind: 'thud', x: pr.x, z: pr.z, y: ground }); }
+    if (hit || blocked || pr.y < ground) { G.proj.delete(pr.id); if (!hit) fx({ kind: 'thud', x: pr.x, z: pr.z, y: ground }); }
   }
 }
 let hitEnemyShip = () => {};

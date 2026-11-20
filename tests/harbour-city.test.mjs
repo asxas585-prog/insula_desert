@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {G,D,WG,newChar,now,cityOff} from '../rpg/state.js';
 import {cheatCode} from '../rpg/game.js';
 import {cityRoad} from '../rpg/land.js';
-import {tunaMsg,tunaTick,reelStep,stern} from '../rpg/tuna.js';
+import {tunaMsg,tunaTick,reelStep,bow} from '../rpg/tuna.js';
 import * as SO from '../rpg/society.js';
 import * as EC from '../rpg/economy.js';
 import * as T from '../rpg/trade.js';
@@ -16,7 +16,7 @@ function setup(){
  const p={id:1,char:c,alive:true,x:C.x,z:C.z,ry:0,inst:null,hp:100,st:100,buffs:{},ws:{readyState:1,send:s=>messages.push(JSON.parse(s))},messages};G.players.set(1,p);return p;
 }
 function boat(p){const port=C.layout.find(b=>b.type==='portus');let point;
- for(let d=60;d<180&&!point;d+=4)for(let k=0;k<32;k++){const a=k*Math.PI/16,x=port.x+Math.sin(a)*d,z=port.z+Math.cos(a)*d;if(WG.terrainHeight(x,z)<-3&&WG.shipOk(x,z)&&!WG.portOverlap(x,z,8,[port])){point={x,z};break;}}
+ for(let d=150;d<300&&!point;d+=4)for(let k=0;k<32;k++){const a=k*Math.PI/16,x=port.x+Math.sin(a)*d,z=port.z+Math.cos(a)*d;if(WG.terrainHeight(x,z)<-3&&WG.shipOk(x,z)&&!WG.portOverlap(x,z,8,[port])){point={x,z};break;}}
  assert(point);const s={id:700,type:'barca',owner:p.char.id,...point,ry:0,speed:0,cargo:{},tunaHold:[null,null],hp:260,maxHp:260};G.W.ships.push(s);p.ship=s.id;Object.assign(p,point);return s;
 }
 function code(p,text){const old=process.env.CHEATS;process.env.CHEATS='1';try{return cheatCode(p,text);}finally{if(old===undefined)delete process.env.CHEATS;else process.env.CHEATS=old;}}
@@ -30,7 +30,7 @@ function roadSite(){for(let i=-22;i<=22;i++)for(let j=-22;j<=22;j++)if(WG.cityRo
 check('only local aedile can place one city road cell, plots stay protected',p=>{const site=roadSite(),[x,z]=WG.cellCenter(C,site.i,site.j);Object.assign(p,{x,z});p.char.bag={stone:40};cityRoad(p,{city:C.id,...site});assert(!G.W.buildings.some(b=>b.type==='via_cell'));cityOff('catana').offices.aedilis={id:p.char.id};cityRoad(p,{city:C.id,...site});assert(!G.W.buildings.some(b=>b.type==='via_cell'));cityOff(C.id).offices.aedilis={id:p.char.id};G.W.plots[`${C.id}:${site.i}:${site.j}`]='bob';cityRoad(p,{city:C.id,...site});assert(!G.W.buildings.some(b=>b.type==='via_cell'));delete G.W.plots[`${C.id}:${site.i}:${site.j}`];cityRoad(p,{city:C.id,...site});assert.equal(G.W.buildings.filter(b=>b.type==='via_cell').length,1);assert.equal(p.char.bag.stone,40-D.BUILDINGS.via_cell.cost.stone);assert(!WG.cellFree(C,site.i,site.j));cityRoad(p,{city:C.id,...site});assert.equal(G.W.buildings.filter(b=>b.type==='via_cell').length,1);});
 check('generic building API cannot bypass aedile road rules',p=>{assert.match(EC.placeCheck(p,'via_cell',p.x,p.z,0),/эдил/);});
 check('harbour and forum have separate city quest boards and acceptance locations',p=>{SO.questBoardTick();const qs=G.W.quests.filter(q=>q.city===C.id);assert(qs.some(q=>q.source==='forum'));assert(qs.some(q=>q.source==='harbor'&&q.type==='tunaSale'));const q=qs.find(q=>q.source==='harbor'),forum=G.W.buildings.find(b=>b.city===C.id&&b.type==='forum_m'),port=G.W.buildings.find(b=>b.city===C.id&&b.type==='portus');Object.assign(p,{x:forum.x,z:forum.z});SO.acceptQuest(p,q.id);assert.equal(p.char.quests.length,0);Object.assign(p,{x:port.x,z:port.z});SO.acceptQuest(p,q.id);assert.equal(p.char.quests.length,1);});
-check('harpoon must physically intersect visible tuna before reeling',p=>{const s=boat(p),a=stern(s),f={id:800,x:a.x,z:a.z-14,heading:Math.PI,home:{x:a.x,z:a.z-14},kg:140,born:now(),hooked:null};G.tuna.set(f.id,f);tunaMsg(p,{type:'harpoonShot',x:f.x,z:f.z});assert.equal(p.harpoon,undefined);for(let i=0;i<25&&!p.harpoon;i++)tunaTick(.05);assert.equal(p.harpoon?.fid,f.id);tunaMsg(p,{type:'harpoonReel',pulling:false,progress:1});assert.equal(p.harpoon.progress,0);});
+check('harpoon must physically intersect visible tuna before reeling',p=>{const s=boat(p),a=bow(s),f={id:800,x:a.x,z:a.z+14,heading:Math.PI,home:{x:a.x,z:a.z+14},kg:140,born:now(),hooked:null};G.tuna.set(f.id,f);tunaMsg(p,{type:'harpoonShot',x:f.x,z:f.z});assert.equal(p.harpoon,undefined);for(let i=0;i<25&&!p.harpoon;i++)tunaTick(.05);assert.equal(p.harpoon?.fid,f.id);tunaMsg(p,{type:'harpoonReel',pulling:false,progress:1});assert.equal(p.harpoon.progress,0);});
 check('surge pulling raises danger; easing reduces tension',()=>{const h={progress:.2,tension:.5},pull=reelStep(h,true,true,1),ease=reelStep(h,false,false,1);assert(pull.tension>h.tension);assert(ease.tension<h.tension);assert(pull.progress>h.progress);});
 check('successful reeling creates a physical catch in a free side slot',p=>{const s=boat(p),f={id:800,x:s.x,z:s.z-6,heading:0,home:{x:s.x,z:s.z},kg:140,born:now(),hooked:p.id};G.tuna.set(f.id,f);p.harpoon={fid:f.id,sid:s.id,tension:.4,progress:.995,pulling:true,start:now()};tunaTick(.1);assert.equal(s.tunaHold[0].kg,140);assert(!p.char.bag.f_tuna);assert(!G.tuna.has(f.id));});
 check('full tuna racks and foreign boats reject harpoon use',p=>{const s=boat(p);s.tunaHold=[{kg:100},{kg:150}];tunaMsg(p,{type:'harpoonShot',x:s.x,z:s.z-20});assert.equal(G.harpoons.size,0);s.tunaHold=[null,null];s.owner='bob';tunaMsg(p,{type:'harpoonShot',x:s.x,z:s.z-20});assert.equal(G.harpoons.size,0);});

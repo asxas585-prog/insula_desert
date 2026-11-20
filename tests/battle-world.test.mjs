@@ -1,0 +1,49 @@
+import fs from 'node:fs';
+import {prepareProjectileObstacles,projectileBlocked} from '../rpg/projectiles.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {G,D,WG,newChar,now} from '../rpg/state.js';
+import * as CB from '../rpg/combat.js';
+import * as SO from '../rpg/society.js';
+import * as EC from '../rpg/economy.js';
+import {rangedProfile} from '../public/rpg/ranged.js';
+import {overlaps,cellOverlaps} from '../public/rpg/footprints.js';
+import {tunaTick,tunaWaterAllowed,tunaPathAllowed,bow} from '../rpg/tuna.js';
+const world=WG.generateWorld(9001),C=world.cities[0];
+function setup(){
+ G.world=world;G.mobs.clear();G.proj.clear();G.players.clear();G.eships.clear();G.chars={};G.pendingHits=[];G.arena=null;G.war=null;G.tuna=new Map();G.harpoons=new Map();G.tunaSpawnAt=Infinity;
+ G.W={time:0,day:1,buildings:world.cities.flatMap(c=>c.layout.map((b,i)=>({...b,id:c.id+':'+i,city:c.id,built:true,muni:c.id+':'+i}))),ships:[],slaves:[],cityState:Object.fromEntries(world.cities.map(c=>[c.id,{owner:c.owner}])),nodes:{},events:[],chronicle:[],flags:{},laws:{},storage:{},quests:[],favor:50,market:{}};
+ const c=newChar('test','Стрелок',D.COLORS[0]);G.chars.test=c;const messages=[];
+ const p={id:1,char:c,x:C.x,z:C.z,y:2,ry:0,hp:100,st:100,alive:true,inst:null,lastMv:now(),buffs:{},ws:{readyState:1,send:s=>messages.push(JSON.parse(s))},messages};G.players.set(p.id,p);CB.setKneelFn(()=>false);return p;
+}
+function check(name,fn){test(name,()=>fn(setup()));}
+function draw(p,kind,held=1){if(kind==='bow')p.char.gear.weapon={k:'bow',q:0};p.char.bag[kind==='bow'?'arrow':'pilum']=3;CB.rangedStart(p,{kind});assert(p.ranged);p.ranged.at-=held;}
+check('bow requires server-side draw and uses ammo only on release',p=>{p.char.gear.weapon={k:'bow',q:0};p.char.bag.arrow=3;CB.playerAttack(p,{dir:[0,0,1],charge:1});assert.equal(G.proj.size,0);assert.equal(p.char.bag.arrow,3);draw(p,'bow');CB.playerAttack(p,{dir:[0,0,1]});assert.equal(G.proj.size,1);assert.equal(p.char.bag.arrow,2);CB.playerAttack(p,{dir:[0,0,1]});assert.equal(G.proj.size,1);});
+check('cancelling draw and releasing too early preserves ammunition',p=>{draw(p,'bow');CB.rangedCancel(p);CB.playerAttack(p,{dir:[0,0,1]});assert.equal(p.char.bag.arrow,3);draw(p,'bow',0);CB.playerAttack(p,{dir:[0,0,1],charge:1});assert.equal(G.proj.size,0);assert.equal(p.char.bag.arrow,3);});
+check('pilum is prepared separately and a forged or NaN direction cannot fire',p=>{draw(p,'pilum');CB.playerThrow(p,{dir:[0,0,4]});assert.equal(G.proj.size,0);assert.equal(p.char.bag.pilum,3);draw(p,'pilum');CB.playerThrow(p,{dir:[0,0,1]});assert.equal([...G.proj.values()][0].kind,'pilum');assert.equal(p.char.bag.pilum,2);});
+check('drawing consumes stamina; exhaustion cancels without spending arrows',p=>{draw(p,'bow');p.st=5.1;CB.rangedTick(1);assert.equal(p.ranged,null);assert.equal(p.char.bag.arrow,3);});
+check('changing weapon or carrying cargo cancels missile release',p=>{draw(p,'bow');p.char.gear.weapon={k:'gladius',q:0};CB.rangedTick(.1);assert.equal(p.ranged,null);p.char.carry='wine';CB.rangedStart(p,{kind:'pilum'});assert(!p.ranged);});
+check('full draw is stronger, movement and over-holding worsen accuracy',()=>{const quick=rangedProfile('bow',.2),full=rangedProfile('bow',1),run=rangedProfile('bow',1,{speed:8,running:true}),tired=rangedProfile('bow',7);assert(full.speed>quick.speed);assert(full.damage>quick.damage);assert(full.spread<quick.spread);assert(run.spread>full.spread);assert(tired.spread>full.spread);});
+check('missile keeps its initial direction rather than locking onto an enemy',p=>{draw(p,'bow');CB.spawnMob('punic_inf',p.x+8,p.z+10);CB.playerAttack(p,{dir:[0,0,1],aim:[p.x+8,3,p.z+10]});const pr=[...G.proj.values()][0];assert(Math.abs(pr.vx)<1);assert(pr.vz>40);const vy=pr.vy;CB.updateProj(.05);assert(pr.vy<vy);});
+check('municipal rectangles free land outside actual wall bounds while protecting interiors',()=>{const b={type:'curia',x:0,z:0,ry:0};assert(!cellOverlaps(9,0,0,4,b,D.BUILDINGS.curia));assert(cellOverlaps(0,0,0,4,b,D.BUILDINGS.curia));assert(overlaps({type:'curia',x:0,z:0,ry:Math.PI/2},D.BUILDINGS.curia,{type:'__cell',x:7,z:0},{r:2}));});
+check('only two enlarged arena layouts exist',()=>{const arenas=world.cities.flatMap(c=>c.layout.filter(b=>b.type==='amphitheatrum').map(b=>c.id));assert.deepEqual(arenas,['messana','syracusae']);assert(D.BUILDINGS.amphitheatrum.r>=60);});
+check('Messana and arena plateau has no hill and harbour water stays wet',()=>{const a=C.layout.find(b=>b.type==='amphitheatrum');let n=0;for(const site of [{...C,r:C.R+40},{...a,r:85}])for(let x=site.x-site.r;x<=site.x+site.r;x+=12)for(let z=site.z-site.r;z<=site.z+site.r;z+=12){if(Math.hypot(x-site.x,z-site.z)>site.r||WG.sdfBase(x,z)<=10)continue;const h=WG.terrainHeight(x,z);if(h>0){assert(h<=2.001,`${x},${z}: ${h}`);n++;}}assert(n>100);const port=C.layout.find(b=>b.type==='portus');assert(Array.from({length:10},(_,i)=>WG.terrainHeight(port.x+Math.sin(port.ry)*(15+i*3),port.z+Math.cos(port.ry)*(15+i*3))).some(h=>h<-.5));});
+check('hostile estates near Roman city bounds or distant Roman buildings are suppressed with stable ids',()=>{const villa={id:'fixed-id',type:'suburb_villa',city:'enemy',x:0,z:0,r:12},rome={id:'rome',owner:'rome',x:0,z:0,R:90},enemy={id:'enemy',owner:'punic',x:600,z:0,R:90},w={cities:[rome,enemy],pois:[villa]};assert.deepEqual(WG.protectEstates(w),['fixed-id']);villa.x=300;assert.deepEqual(WG.protectEstates(w,{},[{type:'curia',city:'rome',x:320,z:0}]),['fixed-id']);villa.x=500;assert.deepEqual(WG.protectEstates(w),[]);assert.equal(villa.id,'fixed-id');});
+check('pirates patrol without players or cargo and events increase their number',()=>{G.players.clear();SO.piratePatrolTick();assert.equal(G.eships.size,3);const before=[...G.eships.values()].map(s=>[s.x,s.z]);for(let i=0;i<20;i++)SO.updateEnemyShips(.05);assert([...G.eships.values()].some((s,i)=>Math.hypot(s.x-before[i][0],s.z-before[i][1])>.01));SO.pirateAttack();assert.equal(G.eships.size,8);SO.piratePatrolTick();assert.equal(G.eships.size,8);});
+check('live tuna already inside a harbour are moved to safe open water',()=>{const port=G.W.buildings.find(b=>b.type==='portus'),f={id:800,x:port.x,z:port.z,home:{x:port.x,z:port.z},heading:0,kg:140,born:now()};G.tuna.set(800,f);assert(!tunaWaterAllowed(f.x,f.z));tunaTick(.05);assert(tunaWaterAllowed(f.x,f.z));assert(!tunaPathAllowed(f,port));assert.deepEqual(bow({x:0,z:0,ry:0}),{x:0,z:4.08});});
+check('gather pose equips a temporary tool and leaves saved weapon untouched',p=>{const n=world.nodes.find(n=>n.tool==='axe');assert(n);G.nodeById=new Map([[n.id,n]]);Object.assign(p,{x:n.x,z:n.z});p.char.gear.weapon={k:'gladius',q:0};p.char.items.push({k:'axe',q:0});EC.gatherPose(p,{id:n.id});assert.equal(p.gathering.tool,'axe');assert.equal(p.char.gear.weapon.k,'gladius');EC.gatherPose(p,{active:false});assert.equal(p.gathering,null);});
+check('arena fighter disengages after four seconds towards a point six metres away',p=>{G.players.clear();const a=CB.spawnMob('glad_murmillo',C.x,C.z),b=CB.spawnMob('glad_thraex',C.x+2.5,C.z);for(const m of [a,b]){m.arena={x:C.x,z:C.z,rx:32,rz:21};m.ffa=1;m.target={kind:'mob',id:m===a?b.id:a.id};}a.exchangeAt=now()-4.1;a.state='wind';a.windEnd=now()+1;CB.updateMobs(.05);assert(a.breakPoint);assert(Math.abs(Math.hypot(a.breakPoint.x-C.x,a.breakPoint.z-C.z)-6)<.01);assert.notEqual(a.state,'wind');});
+check('large melee never assigns more than two bots to the same bot',()=>{G.players.clear();const ms=Array.from({length:7},(_,i)=>CB.spawnMob('glad_murmillo',C.x+i*2.5,C.z));for(const m of ms){m.ffa=10;m.arena={x:C.x,z:C.z,rx:100,rz:100};m.target={kind:'mob',id:ms[0].id===m.id?ms[1].id:ms[0].id};}for(let i=0;i<12;i++)CB.updateMobs(.05);const counts=new Map();for(const m of ms)if(m.target?.kind==='mob')counts.set(m.target.id,(counts.get(m.target.id)||0)+1);assert([...counts.values()].every(n=>n<=2));});
+check('mounted lance needs a sustained straight sprint, damages once and resets on a turn',p=>{p.char.gear.weapon={k:'lance',q:0};p.mounted=true;p.run=true;p.moveSpeed=9;p.lastMv=now();const foe=CB.spawnMob('punic_inf',p.x,p.z+3);foe.y=2;const hp=foe.hp;for(let i=0;i<13;i++)CB.lanceTick(.05);assert.equal(foe.hp,hp);CB.lanceTick(.06);assert(foe.hp<hp);const after=foe.hp;CB.lanceTick(.05);assert.equal(foe.hp,after);p.ry+=1;CB.lanceTick(.05);assert.equal(p.lanceCharge,0);});
+
+check('arrows stop at a rotated municipal wall while elevated shots clear it',()=>{
+ const first=JSON.parse(fs.readFileSync(new URL('../public/rpg/colliders.json',import.meta.url),'utf8')).curia[0],b={id:9876,type:'curia',x:C.x,z:C.z,ry:Math.PI/2,built:true};G.W.buildings=[b];
+ const x=b.x+first[1],z=b.z-first[0],base=WG.terrainHeight(b.x,b.z);prepareProjectileObstacles();assert(projectileBlocked(x,base+1.5,z));assert(!projectileBlocked(x,base+30,z));
+ const pr={id:800,kind:'arrow',x:x-4,z,y:base+1.5,vx:80,vz:0,vy:0,g:0,born:now(),life:3,side:'ally',inst:null,dmg:10};G.proj.set(pr.id,pr);CB.updateProj(.1);assert(!G.proj.has(pr.id));
+});
+check('reeling a live tuna towards the harbour releases the line outside the boundary',p=>{
+ const port=G.W.buildings.find(b=>b.type==='portus'),c=Math.cos(port.ry),s=Math.sin(port.ry);let point=null;
+ for(let d=50;d<170;d+=.2){const x=port.x+s*d,z=port.z+c*d;if(tunaWaterAllowed(x,z)){point={x,z};break;}}
+ assert(point);const ship={id:888,type:'barca',owner:p.char.id,x:port.x+s*30,z:port.z+c*30,ry:port.ry,speed:0,hp:260,tunaHold:[null,null]};G.W.ships=[ship];p.ship=ship.id;const f={id:800,...point,home:{...point},heading:0,kg:100,born:now(),hooked:p.id};G.tuna.set(f.id,f);p.harpoon={sid:ship.id,fid:f.id,progress:.2,tension:.25,pulling:true,start:now()};
+ for(let i=0;i<40&&p.harpoon;i++)tunaTick(.05);assert.equal(p.harpoon,null);assert(tunaWaterAllowed(f.x,f.z));assert(ship.tunaHold.every(x=>!x));
+});

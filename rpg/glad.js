@@ -79,7 +79,7 @@ export function ludusTick() {
 // ---------- Окно гладиаторов: улучшения, магазин, назначения ----------
 export function gladMsg(p, m) {
   const c = p.char, ap = () => c.ap || 0;
-  const amph = builtOf('amphitheatrum').find((b) => dist(p, b) < 70);
+  const amph = builtOf('amphitheatrum').find((b) => dist(p, b) < 95);
   if (m.type === 'enslave') return enslave(p, m.id);
   if (m.type === 'tame') return tame(p, m.id);
   if (m.type === 'gladLudus') { // раб в школу гладиаторов / из неё
@@ -146,8 +146,8 @@ function startBout(p, amph, m) {
   if (!s && !lion) return;
   if (s && (s.rest || 0) > now()) return say(p, `${s.name} ещё не оправился от ран (${Math.ceil(s.rest - now())} с).`, 'warn');
   if (s && slaveGrade(s) < 2 && (s.glvl || 0) < 2) return say(p, `${s.name} слишком слаб для арены: нужен раб 2-го разряда и выше или тренировка в школе гладиаторов до 2 уровня.`, 'warn');
-  const ry = amph.ry || 0, A = { x: amph.x, z: amph.z, rx: 24, rz: 16 };
-  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 24, rz: 16, ry, mode: 'bout', fighters: new Set(), bets: [], state: 'fight', t: now() + 150, owner: c.id, by: c.name, allies: [], foes: [], slave: s ? s.id : null, lion: lion ? lion.id : null };
+  const ry = amph.ry || 0, A = { x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry };
+  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry, mode: 'bout', fighters: new Set(), bets: [], state: 'fight', t: now() + 150, owner: c.id, by: c.name, allies: [], foes: [], slave: s ? s.id : null, lion: lion ? lion.id : null };
   const a = G.arena, side = (k) => ({ x: A.x + Math.cos(ry) * 12 * k, z: A.z - Math.sin(ry) * 12 * k });
   const L = side(-1), Rr = side(1);
   if (s) { const pw = gladPower(s); const mm = spawnMob('glad_slave', L.x, L.z, { lvl: 1, leash: 99 }); mm.maxHp = mm.hp = pw.hp; mm.dmg = pw.dmg; mm.arena = A; mm.ownerName = c.name; mm.title = s.name; a.allies.push(mm.id); }
@@ -190,12 +190,12 @@ export function gamesTick() {
   const cand = W.slaves.filter((x) => !x.hired && !x.ship && !x.squad && (x.rest || 0) < now() && ((x.glvl || 0) >= 1 || slaveGrade(x) >= 2)).map((x) => ({ x, pw: gladPower(x) })).sort((a, b) => b.pw.hp * b.pw.dmg - a.pw.hp * a.pw.dmg).slice(0, 6);
   const list = cand.map(({ x, pw }) => ({ key: 's' + x.id, name: x.name, owner: (G.chars[x.owner] || {}).name || '?', sid: x.id, hp: pw.hp, dmg: pw.dmg, type: 'glad_slave' }));
   for (let i = 0; list.length < 4 && i < NPC_GLADS.length; i++) list.push({ key: 'n' + i, name: NPC_GLADS[i][1], owner: 'арена', type: NPC_GLADS[i][0], lvl: 6 + W.day });
-  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 24, rz: 16, ry: amph.ry || 0, mode: 'games', fighters: new Set(), bets: [], state: 'prep', t: now() + (process.env.FAST === '1' ? 12 : 60), list, ffa: nid(), mobs: [] };
+  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry: amph.ry || 0, mode: 'games', fighters: new Set(), bets: [], state: 'prep', t: now() + (process.env.FAST === '1' ? 12 : 60), list, ffa: nid(), mobs: [] };
   log(`🏟 ВЕЛИКИЕ ИГРЫ в Амфитеатре! Бой «все против всех»: ${list.map((g) => g.name).join(', ')}. Ставки — 60 секунд (E у Амфитеатра).`, 'warn');
   chronicle('Начались Великие игры'); G.dirtyWorld = true;
 }
 function gamesRun(a) {
-  const t = now(), A = { x: a.x, z: a.z, rx: a.rx, rz: a.rz };
+  const t = now(), A = { x: a.x, z: a.z, rx: a.rx, rz: a.rz, ry:a.ry };
   if (a.state === 'prep') {
     if (t < a.t) return;
     a.state = 'fight'; a.t = t + (process.env.FAST === '1' ? 40 : 240);

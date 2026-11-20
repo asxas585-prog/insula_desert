@@ -236,7 +236,7 @@ function catapult(p, m) {
 let pirateCheckAt = 0;
 function pirateTick(t) {
   if (t < pirateCheckAt) return; pirateCheckAt = t + 60;
-  if ((G.W.pirateCalm || 0) > Date.now() / 1000) return; // логово разгромлено — пиратов нет
+  if ([...G.eships.values()].filter(s=>s.type==='pirate_ship').length>=10||(G.W.pirateCalm || 0) > Date.now() / 1000) return; // логово разгромлено — пиратов нет
   for (const s of G.W.ships) {
     if (!s.crates || !s.crates.length || s.berth || (s.pirateAt || 0) > t) continue;
     if (WG.islandAt(s.x, s.z)?.id === 'main' && WG.terrainHeight(s.x, s.z) > -8) continue; // у берега главного острова спокойно
@@ -244,6 +244,7 @@ function pirateTick(t) {
     if (Math.random() > 0.18 + s.crates.length * 0.04) continue;
     const a = rand(0, 6.28); let x = s.x + Math.cos(a) * 230, z = s.z + Math.sin(a) * 230;
     if (!WG.shipOk(x, z)) continue;
+    if([...G.eships.values()].filter(s=>s.type==='pirate_ship').length>=10)break;
     const e = spawnEnemyShip('pirate_ship', x, z, { mode: 'hunt', lvl: encounterLevel(1), life: 900 });
     e.prey = s.id; e.loot = randi(1, 3); s.pirateAt = t + 420;
     for (const q of riders(s)) say(q, '🏴 На горизонте пираты — они идут за вашим грузом! Тараньте, стреляйте или берите на абордаж.', 'bad');

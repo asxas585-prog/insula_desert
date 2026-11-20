@@ -1,3 +1,4 @@
+import {overlaps} from '../public/rpg/footprints.js';
 import { hasCityOffice, cityOf, localOffices } from './access.js';
 // Земля: разрешения Эдила на клетки в районах городов, разметка своих клеток, латифундии, колонии с промыслами
 import { G, D, WG, now, dist, send, log, nid, chronicle, hasAll, payAll, rankOf, rankEarned, hasOffice, officesOf, book } from './state.js';
@@ -112,9 +113,8 @@ export function landCheck(p, type, x, z, ry) {
   }
   // поворот — по улицам города, шагом 90°
   const q = Math.round((ry - C.ry) / (Math.PI / 2)) * (Math.PI / 2);
-  // свои здания на клетках не должны пересекаться блоками
-  for (const b of G.W.buildings) { const k = b.blk; if (!k || k.city !== C.id || b.id === p._movingId) continue; if (bs.i0 < k.i0 + k.n && bs.i0 + n > k.i0 && bs.j0 < k.j0 + k.n && bs.j0 + n > k.j0) return { err: 'На этих клетках уже стоит ' + BUILDINGS[b.type].name };
-  }
+  // Ownership is checked above; old oversized reservation blocks must not hide usable owned land.
+  for(const b of G.W.buildings){if(b.id===p._movingId)continue;if(overlaps({type,x:bs.x,z:bs.z,ry:C.ry+q},def,b,BUILDINGS[b.type]))return{err:'Мешает постройка: '+BUILDINGS[b.type].name};}
   return { x: bs.x, z: bs.z, ry: C.ry + q, dmul: DISTRICTS[worst].mul, city: C.id, district: worst, cells: true, blk: { city: C.id, i0: bs.i0, j0: bs.j0, n } };
 }
 export function onPlaced(p, b, chk) {

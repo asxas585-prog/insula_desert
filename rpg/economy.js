@@ -1,3 +1,4 @@
+import { overlaps } from '../public/rpg/footprints.js';
 import { baseSalePrice, purchasePrice } from '../public/rpg/pricing.js';
 import { privateStores, availableResources, payResources, autoStoreProduction, housingCapacity, housingTick } from './logistics.js';
 import { shipCargoAllowed, cargoAccess, nearShip, localOffices, hasCityOffice, cityOf } from './access.js';
@@ -18,9 +19,16 @@ const anyOffice = p => !!p.char && localOffices(p.char, p).length > 0;
 
 // ---------- Добыча ресурсов ----------
 export function nodeAmt(n) { const s = G.W.nodes[n.id]; return s ? s.a : n.max; }
+export function gatherPose(p,m){
+ if(m.active===false){p.gathering=null;return;}
+ const n=G.nodeById.get(m.id|0);if(!n||!p.alive||p.ship||p.inst||p.char.carry||p.char.tunaCarry||dist(p,n)>5.5||nodeAmt(n)<=0)return;
+ if(n.tool==='axe'&&!hasTool(p.char,'chop')||n.tool==='pick'&&!hasTool(p.char,'mine'))return;
+ p.ranged=null;p.gathering={tool:n.tool,node:n.id,until:now()+1.5};
+ p.lastAtk={t:now(),kind:n.tool==='pick'?'tool':n.tool==='axe'?'axe':'fist',combo:0};
+}
 export function gather(p, id) {
   const c = p.char, n = G.nodeById.get(id), t = now();
-  if (!n || !p.alive || p.ship || p.inst) return;
+  if (!n || !p.alive || p.ship || p.inst || c.carry || c.tunaCarry) return;
   if (dist(p, n) > 5.5) return;
   if (t < (p.gatherReady || 0) - 0.15) return;
   const a = nodeAmt(n);
@@ -147,7 +155,7 @@ export function placeCheck(p, type, x, z, ry, moving = false) {
     if (sl.d > Math.max(3.5, r * 0.4)) return 'Слишком крутой склон';
     if (WG.waterEdgeDist(x, z) < r + 22 && type !== 'fishery') return 'На речном склоне не строят — отойдите от реки или озера';
   }
-  for (const b of G.W.buildings) { if (moving && b.id === moving) continue; if (L && L.cells && b.blk) continue; if (Math.hypot(b.x - x, b.z - z) < ((BUILDINGS[b.type].road ? 1.5 : BUILDINGS[b.type].r) + r) * (L && L.cells ? 0.75 : 1) + (L && L.cells ? 0 : 1)) return 'Мешает другая постройка: ' + BUILDINGS[b.type].name; }
+  for (const b of G.W.buildings) { if (moving && b.id === moving) continue; if(overlaps({type,x,z,ry:L?.ry??ry},def,b,BUILDINGS[b.type]))return 'Мешает другая постройка: '+BUILDINGS[b.type].name; }
   for (const q of G.world.pois) if (q.type !== 'statue' && Math.hypot(q.x - x, q.z - z) < (q.r || 6) + r + 2) return 'Мешает: ' + (q.name || 'место');
   return null;
 }
@@ -763,7 +771,7 @@ export function updateShips(dt) {
 }
 export function seatPos(s, i) {
   const def = SHIPS[s.type], n = def.seats;
-  // штурвал на корме, остальные — по палубе
+  // штурвал на носу, остальные — по палубе
   const lz = i === 0 ? -def.len * 0.38 : -def.len * 0.25 + (i / n) * def.len * 0.6, lx = i === 0 ? 0 : (i % 2 ? -1 : 1) * Math.min(1.4, def.len * 0.06);
   return { x: s.x + Math.sin(s.ry) * lz + Math.cos(s.ry) * lx, z: s.z + Math.cos(s.ry) * lz - Math.sin(s.ry) * lx };
 }
@@ -871,7 +879,7 @@ export function cast(p, x, z) {
   for (const s of G.schools.values()) { const d = Math.hypot(s.x - x, s.z - z); if (d < bd) { bd = d; school = s; } }
   const t = now();
   p.fishing = { x, z, t0: t, biteAt: t + (school ? rand(1.2, 3.5) : rand(4, 10)) * (1 - D.specOf(c, 'fish') * 0.1) * (1 - (w.luck || 0) * 0.5), school: school ? school.id : null, state: 'wait' };
-  if (w.big) { const sh = p.ship && G.W.ships.find((s) => s.id === p.ship); if (!sh || sh.type !== 'barca') send(p, { type: 'log', text: 'Тяжёлая удочка предназначена для морской рыбалки. Тунца ловят кормовым гарпуном баркаса (H), а не удочкой.', kind: 'warn' }); }
+  if (w.big) { const sh = p.ship && G.W.ships.find((s) => s.id === p.ship); if (!sh || sh.type !== 'barca') send(p, { type: 'log', text: 'Тяжёлая удочка предназначена для морской рыбалки. Тунца ловят носовым гарпуном баркаса (H), а не удочкой.', kind: 'warn' }); }
   p.lastAtk = { t, kind: 'rod', combo: 0 };
   send(p, { type: 'cast', x, z, school: !!school });
 }

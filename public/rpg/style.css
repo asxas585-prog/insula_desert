@@ -274,3 +274,6 @@ body.tactical #squadBar .sqi { flex:0 0 136px; }
 /* Money participates in HUD layout instead of overlapping action buttons. */
 #hudTL #denarii { position:static; margin:6px 0 8px; min-height:20px; line-height:20px; }
 #hudTL .bar.xp { margin-bottom:6px; }
+
+#cross.ranged{margin:0;width:var(--spread);height:var(--spread);border:2px solid #f5e3ae;border-radius:50%;background:transparent;transform:translate(-50%,-50%);box-shadow:0 0 2px #000;}
+#cross.ranged:before{content:'';position:absolute;left:0;bottom:-9px;width:var(--draw);height:3px;background:#dfc267;}

@@ -1,4 +1,5 @@
 // Insula Deserta: Империя — архипелаг: рельеф и генерация мира (одинаково на сервере и клиенте)
+import { overlaps, cellOverlaps } from './footprints.js';
 import { ANCIENT_RUINS, ISLANDS, INSTANCES, CFG, CITIES, BUILDINGS, CELL, RESEARCH, DISTRICTS, cellsOf } from './data.js';
 
 export function makeRng(seed) {
@@ -181,6 +182,7 @@ export const SEA_ROCKS = [
 export const rockAt = (x, z, pad = 0) => SEA_ROCKS.find((r) => Math.abs(x - r.x) < r.r + pad && Math.abs(z - r.z) < r.r + pad && Math.hypot(x - r.x, z - r.z) < r.r + pad);
 const ISL = ISLANDS.map((i, k) => ({ ...i, k, seedOff: k * 97.3 }));
 export const islandById = (id) => ISL.find((i) => i.id === id);
+let MESSANA_CLEAR=[];
 let FLATS = []; // {x,z,r,h} — выровненные площадки (лагеря, колонии, входы)
 
 const PEAK = { med: 26, rock: 34, beach: 9, forest: 22, desert: 14 };
@@ -228,6 +230,7 @@ export function terrainHeight(x, z) {
     const fr = f.fall || f.r * 1.6;
     if (d < fr) { let k = 1 - smoothstep(f.r, fr, d); if (f.fall) k *= smoothstep(-1.6, 0.6, h); h = h * (1 - k) + f.h * k; }
   }
+  if(h>CITY_H&&sdfBase(x,z)>10){for(const a of MESSANA_CLEAR){const k=1-smoothstep(a.r,a.r+55,Math.hypot(x-a.x,z-a.z));h=Math.min(h,h*(1-k)+CITY_H*k);}}
   return h;
 }
 // приют новоприбывших и причал стартовой лодки — в Мессане
@@ -583,6 +586,7 @@ function buildRoadGrid() {
 }
 export const roadsList = () => ROADS;
 export const staticBridges = () => STATIC_BRIDGES;
+function roadOverlap(x,z,r){return ROADS.some(q=>q.pts?.some((p,i)=>{if(!i)return false;const a=q.pts[i-1],dx=p[0]-a[0],dz=p[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t)<(q.w||4)/2+r;}));}
 export const onRoadNet = (x, z) => ROAD_GRID.has(Math.floor(x / 8) + ',' + Math.floor(z / 8));
 
 export function extendCivicAvenues(C){
@@ -602,7 +606,7 @@ export function districtAt(x, z) {
     let k = null;
     if (!C.inland && Math.hypot(x - C.hx, z - C.hz) < 72 && d < C.R + 30) k = 'harbor';
     else if (u > 10 && v < -10 && d < C.R - 8) k = 'center';
-    else if (d < C.R * 0.52) k = null;
+    else if (d < C.R * 0.52) k = 'outer';
     else if (d < C.R - 5) k = 'outer';
     else if (d > C.R + 7) k = 'extra';
     return k ? { city: C.id, C, d: k, u, v } : null;
@@ -645,12 +649,12 @@ export function cellFree(C, i, j) {
   if (Math.abs(v) < 6.5 && d < C.R + 140) return false; // декуманус
   if (d > C.R - 6 && d < C.R + 8) return false; // стены
   const [x, z] = cityPt(C, u, v);
-  if (terrainHeight(x, z) < 1.1 || waterEdgeDist(x, z) < 3 || onRoadNet(x, z) || portOverlap(x,z,CELL*.72,_ports.get(C.id)||[])) return false;
+  if (terrainHeight(x, z) < 1.1 || waterEdgeDist(x, z) < 3 || roadOverlap(x,z,CELL/2) || portOverlap(x,z,CELL/2,_ports.get(C.id)||[])) return false;
   let L = _muni.get(C.id); if (!L) { L = []; _muni.set(C.id, L); }
-  for (const b of L) if (Math.hypot(b.x - x, b.z - z) < b.r + 2.2) return false;
+  for (const b of L) if (cellOverlaps(x,z,C.ry,CELL,b,BUILDINGS[b.type])) return false;
   return true;
 }
-export function setMuniFootprints(cities) { _ports.clear(); for(const C of cities)_ports.set(C.id,C.layout.filter(l=>l.type==='portus')); _muni.clear(); for (const c of cities) _muni.set(c.id, c.layout.map((l) => ({ x: l.x, z: l.z, r: (BUILDINGS[l.type] || {}).r || 4 })).concat(c.layout.filter((l) => l.type === 'portus').flatMap((l) => [-26, 0, 26].flatMap((ox) => [0, 26].map((oz) => ({ x: l.x + Math.cos(l.ry) * ox + Math.sin(l.ry) * oz, z: l.z - Math.sin(l.ry) * ox + Math.cos(l.ry) * oz, r: 20 })))))); }
+export function setMuniFootprints(cities) { const mess=cities.find(c=>c.id==='messana'),arena=mess?.layout.find(l=>l.type==='amphitheatrum');if(arena)MESSANA_CLEAR=[{x:mess.x,z:mess.z,r:mess.R+45},{x:arena.x,z:arena.z,r:90}]; _ports.clear();_muni.clear();for(const C of cities){_ports.set(C.id,C.layout.filter(l=>l.type==='portus'));_muni.set(C.id,C.layout.filter(l=>l.type!=='portus'));} }
 // точка высадки с моря у цели (x,z): берег и направление в море (a: cos/sin)
 export function seaApproach(x, z, spread = 0) {
   const isl = islandAt(x, z); if (!isl) return null;
@@ -659,12 +663,20 @@ export function seaApproach(x, z, spread = 0) {
   for (let d = 0; d < 900; d += 3) { const px = x - gx * d, pz = z - gz * d; if (terrainHeight(px, pz) < -1.5) return { x: px + gx * 9, z: pz + gz * 9, a: Math.atan2(-gz, -gx) }; }
   return null;
 }
+export function protectEstates(world,states={},buildings=[]){
+ const roman=world.cities.filter(c=>(states[c.id]?.owner||c.owner)==='rome'),blocked=[];
+ for(const p of world.pois){if(p.type!=='suburb_villa')continue;
+  const hostile=(states[p.city]?.owner||world.cities.find(c=>c.id===p.city)?.owner)!=='rome';
+  p.suppressed=hostile&&(roman.some(c=>Math.hypot(p.x-c.x,p.z-c.z)<c.R+45+p.r)||buildings.some(b=>roman.some(c=>c.id===b.city)&&Math.hypot(p.x-b.x,p.z-b.z)<(BUILDINGS[b.type]?.r||6)+p.r+35));
+  if(p.suppressed)blocked.push(p.id);
+ }return blocked;
+}
 // ---------- Генерация ----------
 // Мир полностью определяется seed: сервер и клиент считают его одинаково.
 export function generateWorld(seed) {
   const rnd = makeRng(seed);
   const R = (a, b) => a + rnd() * (b - a);
-  FLATS = [];
+  FLATS = []; MESSANA_CLEAR=[];
   const W = { seed, nodes: [], dens: [], camps: [], chests: [], pois: [], colonySites: [], entrances: [], flats: FLATS };
   let nid = 1;
   const pois = W.pois;
@@ -691,6 +703,10 @@ export function generateWorld(seed) {
   addPoi('start_camp', START.x, START.z, { ry: START.ry + Math.PI, r: 13, name: 'Приют новоприбывших' });
   addPoi('pier', PIER.x, PIER.z, { ry: PIER.ry, r: 4 });
   genCities(W, rnd, addPoi);
+  const mess=W.cities.find(c=>c.id==='messana'),arena=mess.layout.find(l=>l.type==='amphitheatrum');
+  MESSANA_CLEAR=[{x:mess.x,z:mess.z,r:mess.R+45},{x:arena.x,z:arena.z,r:90}];
+  // Stable POI ids; suppression also reconciles older saves without erasing campaign progress.
+  protectEstates(W,{},W.cities.flatMap(c=>c.layout.map(b=>({...b,city:c.id}))));
   addPoi('volcano', VOLCANO.x, VOLCANO.z, { ry: 0, r: 2, name: 'Этна' });
   // скалы и обломки в море
   W.traders = []; TRADERS = W.traders;

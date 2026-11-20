@@ -743,6 +743,7 @@ function buildWeapon(key, q = 0) {
       if (gold) P(h, box(0.02, 0.06, 0.05), goldM(), 0.03, 0, 0);
       break;
     }
+    case 'lance': {const spear=buildWeapon('hasta',q);spear.scale.y=1.65;g.add(spear);break;}
     case 'hasta': {
       P(g, cyl(0.017, 0.019, 2.25, 8), M(C.woodL), 0, 0.42, 0);
       const hd = grp(g, 0, 1.6, 0, 0, HPI, 0);
@@ -1434,11 +1435,12 @@ export function animateHuman(h, dt, s = {}) {
   // ---------- что в руках ----------
   if (wk && wk !== 'bow' && wk !== 'torch' && wk !== 'sling') { aR[0] = aR[0] * 0.5 - 0.22; eR = Math.min(eR, -0.65); }
   if (wk === 'torch') { aR[0] = aR[0] * 0.3 - 0.45; aR[2] = -0.12; eR = -1.1; wR[0] = -0.8; }
-  if (wk === 'hasta' || wk === 'trident' || wk === 'pilum') { wR[0] = -0.9; }
+  if (wk === 'lance' || wk === 'hasta' || wk === 'trident' || wk === 'pilum') { wR[0] = -0.9; }
   if (wk && wk.startsWith('rod')) { wR[0] = -1.4; }
   if (wk === 'bow') { aL[0] = aL[0] * 0.4 - 0.15; aL[2] = 0.18; eL = -0.7; }
   if (u._torchL) { aL[0] = aL[0] * 0.3 - 0.45; aL[2] = 0.12; eL = -1.1; wL[0] = -0.8; }
   if (hasShield) { aL[0] = aL[0] * 0.25 - 0.15; aL[2] = 0.2; eL = -1.38; }
+  if(wk==='lance'&&s.ride&&(s.lanceSpeed||s.speed)>3){ikR={t:[-.3,.24,.35],p:[-1,-.4,-.2]};ikRw=1;wdR=[0,-.08,1];}
   // ---------- переноска ----------
   if (A.carry > 0.01) {
     const w = A.carry; ikR = { t: [-0.17, 0.2, 0.36], p: [-1, -0.8, -0.3] }; ikL = { t: [0.17, 0.2, 0.36], p: [1, -0.8, -0.3] }; ikRw = ikLw = w;
@@ -1651,6 +1653,7 @@ export function animateHuman(h, dt, s = {}) {
     h.getWorldQuaternion(_q2); u.torchFlame.quaternion.copy(_q1.multiply(_q2));
   }
   const w = u.gear.weapon;
+  if(w)w.visible=!(wk==='pilum'&&s.attack?.kind==='throw'&&s.attack.p>=.55);
   if (w) w.traverse((c) => {
     if (c.userData.hang) {
       c.parent.updateWorldMatrix(true, false);
@@ -3522,6 +3525,7 @@ export function makeBuilding(type, opts = {}) {
   const fn = BUILD[type];
   if (fn) fn(g, opts);
   else { plinth(g, 0, 0, 4, 4, 0.3); wall(g, 0, 0.3, 0, 3.6, 3, 3.6); gable(g, 0, 3.3, 0, 3.6, 3.6); colB(g, 0, 0, 4, 4); }
+  if(type==='amphitheatrum'){g.scale.set(1.35,1,1.35);for(const c of g.userData.colliders||[]){c.x*=1.35;c.z*=1.35;if(c.r)c.r*=1.35;if(c.w)c.w*=1.35;if(c.d)c.d*=1.35;}}
   return g;
 }
 
@@ -4327,7 +4331,7 @@ export function animateFishSchool(g, t) {
 // Предметы на земле
 // ======================================================================
 const GEAR_SLOT = {
-  weapon: ['knife', 'gladius', 'spatha', 'axe', 'hasta', 'bow', 'khopesh', 'falcata', 'rudis', 'pick', 'rod', 'rod_pro', 'torch', 'pilum', 'falx', 'sling', 'trident', 'sica'],
+  weapon: ['lance', 'knife', 'gladius', 'spatha', 'axe', 'hasta', 'bow', 'khopesh', 'falcata', 'rudis', 'pick', 'rod', 'rod_pro', 'torch', 'pilum', 'falx', 'sling', 'trident', 'sica'],
   offhand: ['parma', 'scutum', 'barbshield', 'punicshield', 'caetra'],
   head: ['pileus', 'galea_bronze', 'galea_iron', 'galea_centurio', 'horns', 'punichelm', 'punichelm_gold', 'nemes', 'murmillo', 'thraex'],
   body: ['subarmalis', 'hamata', 'squamata', 'segmentata', 'croc_armor', 'punic_mail', 'fur', 'chief', 'pirate', 'punic', 'punic_gold', 'tunic_punic', 'iberian', 'robber', 'robber_boss', 'glad'],

@@ -34,7 +34,7 @@ test('old additions in Messana relocate onto free city cells and retain all stoc
   const moved=arrangeCityAdditions(W,world.cities);assert.equal(moved.length,3);
   for(const b of additions){
     assert.deepEqual(b.store,{wood:73});assert.deepEqual(b.slaves,[91]);assert.equal(b.hp,123);assert(b.built);
-    assert.equal(b.blk.n,4);assert.equal(b.ry,C.ry);assert(!WG.portOverlap(b.x,b.z,D.BUILDINGS[b.type].r,[port]));
+    assert.equal(b.blk.n,3);assert.equal(b.ry,C.ry);assert(!WG.portOverlap(b.x,b.z,D.BUILDINGS[b.type].r,[port]));
     const snap=WG.blockSnap(C,b.x,b.z,b.blk.n);assert(Math.hypot(b.x-snap.x,b.z-snap.z)<.001);
     for(let i=b.blk.i0;i<b.blk.i0+b.blk.n;i++)for(let j=b.blk.j0;j<b.blk.j0+b.blk.n;j++){
       assert(WG.cellFree(C,i,j));assert.equal(W.plots[`messana:${i}:${j}`],'alice');

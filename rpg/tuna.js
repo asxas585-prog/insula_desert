@@ -4,7 +4,7 @@ import {grantXp,grantDig} from './combat.js';
 const fish=()=>G.tuna||(G.tuna=new Map());
 const shots=()=>G.harpoons||(G.harpoons=new Map());
 const say=(p,text)=>send(p,{type:'log',text,kind:'info'});
-export function stern(s){return{x:s.x-Math.sin(s.ry)*D.SHIPS.barca.len*.34,z:s.z-Math.cos(s.ry)*D.SHIPS.barca.len*.34};}
+export function bow(s){return{x:s.x+Math.sin(s.ry)*D.SHIPS.barca.len*.34,z:s.z+Math.cos(s.ry)*D.SHIPS.barca.len*.34};}
 export function segmentDistance(x,z,a,b){const dx=b.x-a.x,dz=b.z-a.z,n=dx*dx+dz*dz,t=n?Math.max(0,Math.min(1,((x-a.x)*dx+(z-a.z)*dz)/n)):0;return Math.hypot(x-a.x-dx*t,z-a.z-dz*t);}
 export function reelStep(h,pulling,surge,dt){return{tension:Math.max(0,h.tension+dt*(pulling?(surge?.43:.12):(surge?-.04:-.26))),progress:Math.max(0,Math.min(1,h.progress+dt*(pulling?(surge?.012:.09):-.008)))};}
 const hold=s=>{s.tunaHold||=[null,null];return s.tunaHold;};
@@ -35,13 +35,15 @@ export function tunaMsg(p,m){
  if(hold(s).every(Boolean))return say(p,'Оба бортовых места заняты. Сначала выгрузите тунца.');
  if(Math.abs(s.speed||0)>2)return say(p,'Сбавьте ход до остановки перед выстрелом.');
  if((p.harpoonAt||0)>now())return;
- const x=Number(m.x),z=Number(m.z),origin=stern(s),L=dist(origin,{x,z});
- if(!Number.isFinite(x)||!Number.isFinite(z)||L<2||L>60)return say(p,'Гарпун достаёт на 60 м. Наведите прицел на воду за кормой.');
+ const x=Number(m.x),z=Number(m.z),origin=bow(s),L=dist(origin,{x,z});
+ if(!Number.isFinite(x)||!Number.isFinite(z)||L<2||L>60)return say(p,'Гарпун достаёт на 60 м. Наведите прицел на воду перед носом.');
  const dx=(x-origin.x)/L,dz=(z-origin.z)/L;
- if(dx*-Math.sin(s.ry)+dz*-Math.cos(s.ry)<-.3)return say(p,'Гарпун установлен на корме: разверните баркас кормой к тунцу.');
+ if(dx*Math.sin(s.ry)+dz*Math.cos(s.ry)<-.3)return say(p,'Гарпун установлен на носу: разверните баркас носом к тунцу.');
  p.harpoonAt=now()+3;
  const id=nid();shots().set(id,{id,pid:p.id,sid:s.id,x:origin.x,z:origin.z,dx,dz,left:60});
 }
+export function tunaWaterAllowed(x,z){return WG.terrainHeight(x,z)<-1.5&&WG.shipOk(x,z)&&!WG.portOverlap(x,z,5,G.W.buildings.filter(b=>b.type==='portus'));}
+export function tunaPathAllowed(a,b){const n=Math.max(1,Math.ceil(dist(a,b)/2));for(let i=1;i<=n;i++)if(!tunaWaterAllowed(a.x+(b.x-a.x)*i/n,a.z+(b.z-a.z)*i/n))return false;return true;}
 export function tunaTick(dt){
  const t=now();
  // Persistent sea population, including reachable water around fishing boats.
@@ -55,11 +57,16 @@ export function tunaTick(dt){
   }
  }
  for(const f of fish().values()){
+  if(!tunaWaterAllowed(f.x,f.z)){
+   if(f.hooked){const p=G.players.get(f.hooked);if(p)release(p,'Линь отпущен у границы гавани.');}
+   let safe=null;for(let r=6;r<200&&!safe;r+=6)for(let k=0;k<24;k++){const x=f.x+Math.sin(k*Math.PI/12)*r,z=f.z+Math.cos(k*Math.PI/12)*r;if(tunaWaterAllowed(x,z)){safe={x,z};break;}}
+   if(!safe){fish().delete(f.id);continue;}Object.assign(f,safe);f.home={...safe};
+  }
   if(f.hooked&&!G.players.has(f.hooked))f.hooked=null;
   if(f.hooked)continue;
   if(dist(f,f.home)>65)f.heading=Math.atan2(f.home.x-f.x,f.home.z-f.z);
   const nx=f.x+Math.sin(f.heading)*2.5*dt,nz=f.z+Math.cos(f.heading)*2.5*dt;
-  if(WG.terrainHeight(nx,nz)<-1.5&&WG.shipOk(nx,nz)){f.x=nx;f.z=nz;}else f.heading+=1.4;
+  if(tunaPathAllowed(f,{x:nx,z:nz})){f.x=nx;f.z=nz;}else f.heading+=1.4;
   if(t-f.born>1200)fish().delete(f.id);
  }
  for(const h of shots().values()){
@@ -75,7 +82,7 @@ export function tunaTick(dt){
   if(!p.alive||!f||!s||p.ship!==s.id||s.owner!==p.char.id||Math.abs(s.speed||0)>4||dist(f,s)>65){release(p,'Линь сорвался: баркас отошёл или рыбак покинул снасть.');continue;}
   h.surge=((t-h.start)%5)>3.1;Object.assign(h,reelStep(h,h.pulling,h.surge,dt));
   if(h.tension>=1||t-h.start>65){release(p,'Тунец сорвался. Чередуйте подтягивание и отпускание линя.');continue;}
-  if(h.pulling){const a=Math.atan2(s.x-f.x,s.z-f.z);f.heading=a;f.x+=Math.sin(a)*Math.max(0,Math.min(dist(f,s)-3,2.7*dt));f.z+=Math.cos(a)*Math.max(0,Math.min(dist(f,s)-3,2.7*dt));}
+  if(h.pulling){const a=Math.atan2(s.x-f.x,s.z-f.z),step=Math.max(0,Math.min(dist(f,s)-3,2.7*dt)),next={x:f.x+Math.sin(a)*step,z:f.z+Math.cos(a)*step};if(!tunaPathAllowed(f,next)){release(p,'Тунец не заходит в гавань: ловите в открытой воде.');continue;}f.heading=a;Object.assign(f,next);}
   if(h.progress>=1){const i=hold(s).findIndex(x=>!x);if(i<0){release(p,'Нет свободного бортового места.');continue;}
    hold(s)[i]={id:f.id,kg:f.kg,caught:Date.now()};fish().delete(f.id);p.harpoon=null;p.char.stats2.fish=(p.char.stats2.fish||0)+1;questHook(p,'fish',{sp:'f_tuna',kg:f.kg});grantXp(p,90);p.dirtyChar=true;G.dirtyWorld=true;say(p,`Тунец ${f.kg} кг закреплён ${i===0?'слева':'справа'}. Возвращайтесь в гавань, сойдите на берег и выгрузите рыбу через G.`);
   }

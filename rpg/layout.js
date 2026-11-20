@@ -11,7 +11,7 @@ export function arrangeCityAdditions(W, cities) {
     if (b.muni || b.lat || !b.owner || !['warehouse', 'supply_depot', 'quarters'].includes(b.type)) continue;
     const C = cities.find(c => c.id === b.city) || cities.find(c => Math.hypot(c.x-b.x,c.z-b.z) <= c.R+140);
     if (!C) continue;
-    const def = D.BUILDINGS[b.type], n = D.cellsOf(b.type);
+    const def = D.BUILDINGS[b.type], n = b.blk?.n || D.cellsOf(b.type);
     const cells = p => Array.from({length:n*n}, (_,k) => [p.i0+k%n,p.j0+Math.floor(k/n)]);
     const fits = (p, owned) => {
       const dd = WG.districtAt(p.x,p.z);

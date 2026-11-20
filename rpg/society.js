@@ -319,17 +319,20 @@ export function spawnEnemyShip(type, x, z, o = {}) {
   G.eships.set(s.id, s);
   return s;
 }
-function pirateAttack() {
-  const w = W();
-  if ((w.pirateCalm || 0) > Date.now() / 1000) return;
-  const sh = w.ships.filter((s) => !builtOf('portus').some((b) => dist(b, s) < 120));
-  let x, z;
-  if (sh.length) { const s = pick(sh); const a = rand(0, 6.28); x = s.x + Math.cos(a) * 260; z = s.z + Math.sin(a) * 260; }
-  else { const c = w.buildings.find((b) => b.type === 'colonia'); if (!c) return; x = c.x + 250; z = c.z; }
-  if (!WG.shipOk(x, z)) return;
-  spawnEnemyShip('pirate_ship', x, z, { mode: 'hunt', lvl: encounterLevel(1), life: 600 });
-  w.events.push({ id: nid(), kind: 'pirates', title: 'Пираты', text: 'Киликийские пираты охотятся за кораблями.', until: now() + 600 });
-  log('🏴 Киликийские пираты замечены в море! Берегите корабли — или потопите их ради добычи.', 'bad');
+export function pirateEventActive(){return (W().events||[]).some(e=>e.kind==='pirates'&&e.until>now());}
+export function pirateAttack(){
+ const w=W();if(!pirateEventActive())w.events.push({id:nid(),kind:'pirates',title:'Пираты',text:'Восемь пиратских патрулей охотятся за кораблями; дальность преследования увеличена.',until:now()+600});
+ piratePatrolTick();G.dirtyWorld=true;log('🏴 Пиратский флот усилился. В море опаснее, у причалов безопасно.','bad');
+}
+export function piratePatrolTick(){
+ const event=pirateEventActive(),target=event?8:3,existing=[...G.eships.values()].filter(s=>s.type==='pirate_ship');
+ for(const s of existing)if(s.ambient&&!s.boarded){s.until=now()+900;if(!event&&s.eventBonus){s.until=now()+60;s.eventBonus=false;s.ambient=false;s.mode='flee';}}
+ let count=existing.filter(s=>s.mode!=='flee').length;
+ for(let k=0;count<target&&k<240;k++){
+  const c=G.world.cities[k%G.world.cities.length],a=k*2.399,r=c.R+180+(k%7)*60,x=c.x+Math.sin(a)*r,z=c.z+Math.cos(a)*r;
+  if(!WG.shipOk(x,z)||WG.terrainHeight(x,z)>-4||WG.waterEdgeDist(x,z)<35||WG.portOverlap(x,z,100,W().buildings.filter(b=>b.type==='portus'))||existing.some(s=>Math.hypot(s.x-x,s.z-z)<160)||[...G.players.values()].some(p=>dist(p,{x,z})<100))continue;
+  const e=spawnEnemyShip('pirate_ship',x,z,{mode:'hunt',lvl:encounterLevel(1),life:900});e.ambient=true;e.eventBonus=count>=3;e.patrol={x,z};e.patrolAngle=a;e.ry=a;existing.push(e);count++;
+ }
 }
 // прямая по воде между точками (последние `skip` метров до цели не проверяем — там причал или берег высадки)
 function seaClear(ax, az, bx, bz, skip = 0) { const L = Math.hypot(bx - ax, bz - az), n = Math.ceil(Math.max(0, L - skip) / 12); for (let i = 1; i <= n; i++) { const k = Math.min(1, (i * 12) / (L || 1)); if (!WG.shipOk(ax + (bx - ax) * k, az + (bz - az) * k)) return false; } return true; }
@@ -341,11 +344,15 @@ export function updateEnemyShips(dt) {
     let tx = null, tz = null;
     if (s.mode === 'raid' && !s.landed && s.land) { tx = s.land.x; tz = s.land.z; }
     else if (s.mode === 'hunt') {
-      let best = null, bd = 400;
-      const prey = s.prey && W().ships.find((x) => x.id === s.prey);
-      if (prey) { best = prey; bd = dist(prey, s); } // пират гонится за кораблём с грузом
-      else for (const ps of W().ships) { if (ps.berth) continue; const d = dist(ps, s); if (d < bd) { bd = d; best = ps; } }
-      if (best) { tx = best.x; tz = best.z; if (bd < def.len && (!s.ramT || t - s.ramT > 3)) { s.ramT = t; best.hp -= 45; fx({ kind: 'ram', x: best.x, z: best.z }); for (const q of riders(best)) send(q, { type: 'log', text: 'Пираты таранят ваш корабль!', kind: 'bad' }); } }
+      const aggressive=pirateEventActive(),limit=aggressive?650:240;
+      const ports=W().buildings.filter(b=>b.type==='portus'),safe=ps=>ps.hp>0&&!ps.berth&&!WG.portOverlap(ps.x,ps.z,aggressive?20:50,ports);
+      let best=null,bd=limit;for(const ps of W().ships){if(!safe(ps))continue;const d=dist(ps,s);if(d<bd){best=ps;bd=d;}}
+      s.prey=best?.id||null;
+      if(best){tx=best.x;tz=best.z;if(bd<def.len&&t-(s.ramT||0)>(aggressive?2:3)){s.ramT=t;best.hp-=aggressive?45:30;fx({kind:'ram',x:best.x,z:best.z});for(const q of riders(best))send(q,{type:'log',text:'Пираты таранят ваш корабль!',kind:'bad'});}}
+      else if(s.ambient){
+       if(!s.waypoint||dist(s,s.waypoint)<35){for(let i=0;i<16;i++){s.patrolAngle+=.7;const x=s.patrol.x+Math.sin(s.patrolAngle)*220,z=s.patrol.z+Math.cos(s.patrolAngle)*220;if(WG.shipOk(x,z)&&WG.waterEdgeDist(x,z)>35&&!WG.portOverlap(x,z,65,ports)){s.waypoint={x,z};break;}}}
+       if(s.waypoint){tx=s.waypoint.x;tz=s.waypoint.z;}
+      }
     }
     if (s.mode === 'raid' && !s.landed && t > s.born + 300) { s.landed = true; s.leaveAt = t; retreat(s, false); }
     if (s.mode === 'raid' && s.landed && t > s.born + 420 && s.leaveAt > t) s.leaveAt = t; // флот Карфагена — не дольше 7 минут

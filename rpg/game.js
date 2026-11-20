@@ -80,6 +80,9 @@ function handle(p, m) {
   if (!p.alive && !['mv','chat','ping'].includes(m.type)) return;
   switch (m.type) {
     case 'mv': return onMove(p, m);
+    case 'arenaDismount': {const b=G.W.buildings.find(b=>b.id===m.bid&&b.type==='amphitheatrum'&&b.built);if(b&&dist(p,b)<100){p.mounted=false;p.dirtyChar=true;sendRoster();}return;}
+    case 'rangedStart': return CB.rangedStart(p,m);
+    case 'rangedCancel': return CB.rangedCancel(p);
     case 'atk': if (!p.ship || true) CB.playerAttack(p, m); return;
     case 'throw': return CB.playerThrow(p, m);
     case 'block': p.block = !!m.on && p.alive && !(p.guardBreak > now()) && !p.ship; return;
@@ -89,6 +92,7 @@ function handle(p, m) {
     }
     case 'tradeVisit': return tradeVisit(p, m);
     case 'warehouseMove': case 'autoStore': return LG.warehouseMsg(p, m);
+    case 'gatherPose': return EC.gatherPose(p,m);
     case 'gather': return EC.gather(p, m.id | 0);
     case 'open': return EC.openChest(p, String(m.id));
     case 'eat': return eat(p, m.res);
@@ -367,10 +371,11 @@ function onMove(p, m) {
   const d = Math.hypot(x - p.x, z - p.z), limit = (p.mounted ? 12.5 : Math.min(26, CFG.run * derivedOf(p.char).speed * 1.3))*(p.char.tunaCarry?.55:1);
   p.moveCredit = Math.min(3, (p.moveCredit ?? 3) + limit * dt);
   const maxD = p.moveCredit + (t - (p.dodgeT || 0) < .6 ? 1.5 : 0);
-  const platform = !!m.pj && !p.mounted && !p.inst && G.W.buildings.some(b => b.type === 'amphitheatrum' && b.built && Math.hypot(b.x - p.x,b.z - p.z) < 65 && Math.hypot(b.x-x,b.z-z)<65 && d<75);
+  const platform = !!m.pj && !p.mounted && !p.inst && G.W.buildings.some(b => b.type === 'amphitheatrum' && b.built && Math.hypot(b.x - p.x,b.z - p.z) < 100 && Math.hypot(b.x-x,b.z-z)<95 && d<105);
   if (d > maxD && !platform) { send(p, { type: 'teleport', x: p.x, z: p.z }); return; } // pj — сел на трибуну или поднялся на башню (место далеко от входа)
   if (p.inst) { const I = G.instances.get(p.inst); if (I && !I.walkable(x, z)) return; }
   else if (Math.abs(x) > CFG.world - 5 || Math.abs(z) > CFG.world - 5) return;
+  p.moveSpeed=dt>0?Math.min(limit,d/dt):0;
   p.moveCredit = Math.max(0, p.moveCredit - d); p.x = x; p.z = z;
   const ground = p.inst ? G.instances.get(p.inst)?.y0 || 60 : Math.max(0, WG.deckHeight(x,z,G.W.buildings) ?? WG.terrainHeight(x,z));
   p.y = ground + Math.max(0, Math.min(16, (Number(m.y) || ground) - ground));
@@ -513,6 +518,8 @@ function tick() {
   CB.updateMobs(dt);
   CB.updateProj(dt);
   EC.updateShips(dt);
+  CB.rangedTick(dt);CB.lanceTick(dt);
+  if(tickN%100===0)SO.piratePatrolTick();
   SO.updateEnemyShips(dt);
   T.tradeTick(dt); GL.gladTick(now()); CP.campaignTick(dt); RT.routesTick(dt); AR.armyTick(dt);
   EC.updateSchools(dt); TN.tunaTick(dt);
@@ -571,8 +578,8 @@ function sendState() {
   const t = now(), warStatus = G.war?.lobbies?.size ? WAR.warPublic() : null;
   const plist = [];
   for (const q of G.players.values()) {
-    const at = q.lastAtk && t - q.lastAtk.t < 1.2 ? [q.lastAtk.kind, r1(t - q.lastAtk.t), q.lastAtk.combo] : null;
-    plist.push([q.id, r1(q.x), r1(q.z), Math.round(q.ry * 100) / 100, (q.alive ? 1 : 0) | (q.run ? 2 : 0) | (q.block ? 4 : 0) | (q.swim ? 8 : 0) | (t - (q.dodgeT || 0) < CFG.dodgeTime ? 16 : 0) | (q.fishing ? 32 : 0) | ((q.anim & 1) ? 64 : 0) | (q.fishing && q.fishing.state === 'bite' ? 128 : 0), Math.round(q.hp / derivedOf(q.char).maxHp * 100), q.ship || 0, q.seat ?? -1, q.inst || 0, at, q.fishing ? [r1(q.fishing.x), r1(q.fishing.z)] : null, q.jh ? r1(q.jh) : 0]);
+    const at = q.ranged ? [q.ranged.kind==='bow'?'bow':'throw',q.ranged.kind==='bow'?Math.min(.46,(t-q.ranged.at)*.46):.28,0,1] : q.lastAtk && t - q.lastAtk.t < 1.2 ? [q.lastAtk.kind, r1(t - q.lastAtk.t), q.lastAtk.combo] : null;
+    plist.push([q.id, r1(q.x), r1(q.z), Math.round(q.ry * 100) / 100, (q.alive ? 1 : 0) | (q.run ? 2 : 0) | (q.block ? 4 : 0) | (q.swim ? 8 : 0) | (t - (q.dodgeT || 0) < CFG.dodgeTime ? 16 : 0) | (q.fishing ? 32 : 0) | ((q.anim & 1) ? 64 : 0) | (q.fishing && q.fishing.state === 'bite' ? 128 : 0), Math.round(q.hp / derivedOf(q.char).maxHp * 100), q.ship || 0, q.seat ?? -1, q.inst || 0, at, q.fishing ? [r1(q.fishing.x), r1(q.fishing.z)] : null, q.jh ? r1(q.jh) : 0, q.gathering?.until>t?q.gathering.tool:null]);
   }
   const ships = G.W.ships.map((s) => [s.id, s.type, r1(s.x), r1(s.z), Math.round(s.ry * 100) / 100, r1(s.speed), Math.round(s.hp / s.maxHp * 100)]);
   const eships = [...G.eships.values()].map((s) => [s.id, s.type, r1(s.x), r1(s.z), Math.round(s.ry * 100) / 100, r1(s.speed), Math.round(s.hp / s.maxHp * 100)]);
@@ -614,7 +621,7 @@ function sendWorld(p) {
   const W = G.W, t = now();
   const cid = cityNear(p.x, p.z), CO = { id: cid, name: (G.world.cities.find((C) => C.id === cid) || {}).name || cid, o: cityOff(cid) }, LV = CO.o.lawVote; if (p.wCity !== cid) p.dirtyChar = true; p.wCity = cid; // должности и законы — того города, где игрок
   send(p, {
-    type: 'world', war: WAR.warPublic(), gladTop: G.W.slaves.filter((x) => (x.gw || 0) + (x.glvl || 0) > 0).sort((a, b) => ((b.gw || 0) * 3 + (b.glvl || 0)) - ((a.gw || 0) * 3 + (a.glvl || 0))).slice(0, 15).map((x) => ({ name: x.name, owner: (G.chars[x.owner] || {}).name || '?', lvl: x.glvl || 0, w: x.gw || 0 })), horseStables: W.buildings.filter((b) => b.type === 'equile' && b.built && (b.stock || []).some((f) => f.sale || f.rent)).map((b) => ({ id: b.id, x: b.x, z: b.z, owner: b.ownerName, sale: b.stock.filter((f) => f.sale && f.grow >= D.HORSE_ECON.grow).length, rent: b.stock.filter((f) => f.rent && !f.out && f.grow >= D.HORSE_ECON.grow).length })), gamesIn: W.gamesDay != null ? W.gamesDay - W.day : null, gamesLog: W.gamesLog || [], gates: W.gates || {}, watch: Object.fromEntries(Object.entries(W.watch || {}).map(([k, v]) => [k, { n: v.n, lvl: v.lvl, live: (v.live || []).length }])), sci: W.sci || {}, plots: W.plots || {}, plotNames: Object.fromEntries([...new Set(Object.values(W.plots || {}))].map((cid) => [cid, G.chars[cid] ? G.chars[cid].name : '?'])), cityState: CP.cityInfo(), fleetBuilt: W.fleetBuilt || {}, romeSent: W.romeSent || {}, treasury: Math.round(W.treasury), storage: W.storage, city: CO.id, cityName: CO.name, laws: CO.o.laws, offices: CO.o.offices, cityOffices: Object.fromEntries(romanCities().map((C) => [C.id, { name: C.name, offices: cityOff(C.id).offices }])), election: CO.o.election ? { ends: Math.round(CO.o.election.ends - t), offices: Object.fromEntries(Object.entries(CO.o.election.offices).map(([k, o]) => [k, Object.fromEntries(Object.entries(o.cands).map(([cid, cc]) => [cid, { name: cc.name, votes: Object.values(cc.votes).reduce((a, v) => a + v, 0), mine: !!cc.votes[p.char.id] }]))])) } : null,
+    type: 'world', excludedSuburbs:WG.protectEstates(G.world,W.cityState,W.buildings), war: WAR.warPublic(), gladTop: G.W.slaves.filter((x) => (x.gw || 0) + (x.glvl || 0) > 0).sort((a, b) => ((b.gw || 0) * 3 + (b.glvl || 0)) - ((a.gw || 0) * 3 + (a.glvl || 0))).slice(0, 15).map((x) => ({ name: x.name, owner: (G.chars[x.owner] || {}).name || '?', lvl: x.glvl || 0, w: x.gw || 0 })), horseStables: W.buildings.filter((b) => b.type === 'equile' && b.built && (b.stock || []).some((f) => f.sale || f.rent)).map((b) => ({ id: b.id, x: b.x, z: b.z, owner: b.ownerName, sale: b.stock.filter((f) => f.sale && f.grow >= D.HORSE_ECON.grow).length, rent: b.stock.filter((f) => f.rent && !f.out && f.grow >= D.HORSE_ECON.grow).length })), gamesIn: W.gamesDay != null ? W.gamesDay - W.day : null, gamesLog: W.gamesLog || [], gates: W.gates || {}, watch: Object.fromEntries(Object.entries(W.watch || {}).map(([k, v]) => [k, { n: v.n, lvl: v.lvl, live: (v.live || []).length }])), sci: W.sci || {}, plots: W.plots || {}, plotNames: Object.fromEntries([...new Set(Object.values(W.plots || {}))].map((cid) => [cid, G.chars[cid] ? G.chars[cid].name : '?'])), cityState: CP.cityInfo(), fleetBuilt: W.fleetBuilt || {}, romeSent: W.romeSent || {}, treasury: Math.round(W.treasury), storage: W.storage, city: CO.id, cityName: CO.name, laws: CO.o.laws, offices: CO.o.offices, cityOffices: Object.fromEntries(romanCities().map((C) => [C.id, { name: C.name, offices: cityOff(C.id).offices }])), election: CO.o.election ? { ends: Math.round(CO.o.election.ends - t), offices: Object.fromEntries(Object.entries(CO.o.election.offices).map(([k, o]) => [k, Object.fromEntries(Object.entries(o.cands).map(([cid, cc]) => [cid, { name: cc.name, votes: Object.values(cc.votes).reduce((a, v) => a + v, 0), mine: !!cc.votes[p.char.id] }]))])) } : null,
     electionIn: Math.max(0, Math.round(W.electionAt - W.time)), questsIn: W.questsAt ? Math.max(0, Math.round((W.questsAt - Date.now()) / 1000)) : null,
     lawVote: LV ? { key: LV.key, opt: LV.opt, by: LV.by, ends: Math.round(LV.ends - t), yes: Object.values(LV.votes).filter((v) => v.yes).reduce((a, v) => a + v.w, 0), no: Object.values(LV.votes).filter((v) => !v.yes).reduce((a, v) => a + v.w, 0), mine: LV.votes[p.char.id] ? (LV.votes[p.char.id].yes ? 1 : -1) : 0 } : null, canLaw: Object.fromEntries(Object.keys(D.LAWS).map((k) => [k, SO.canPropose(p.char, CO.id, k)])),
     story: W.story, flags: W.flags || {}, threat: Math.round(W.threat), favor: Math.round(W.favor), day: W.day, time: Math.round(W.time),
@@ -648,7 +655,7 @@ function ensureStarterBoat() {
 export function startRpg(wss) {
   loadAll();
   ensureStarterBoat(); setInterval(() => { try { ensureStarterBoat(); } catch {} }, 120000);
-  EC.refreshSlaveMarket(true); SO.questBoardTick(); LG.housingTick();
+  EC.refreshSlaveMarket(true); SO.questBoardTick(); LG.housingTick();SO.storyCheck();SO.piratePatrolTick();
   CB.setCombatHooks({ arenaKnockout: SO.arenaKnockout, leaveShip: (p) => { p.ship = null; p.seat = null; } });
   CB.setShipHit(SO.hitEnemyShip); CB.setKneelFn(GL.tryKneel); SO.setBoutFn(GL.boutTick);
   EC.setShipSunkHook(T.onShipSunk); EC.setBerthFn((type, port) => T.freeBerth(type, port, 200, port.id)); EC.setBerthDeckFn((s) => { const b = T.berthByKey(s.type, s.berth); return b && b.deck; }); CB.setSquadFns(AR.squadSlot, AR.squadKill); SC.setTerrain(WG.terrainHeight); CB.setTreasureFn(SC.giveTreasureMap); T.setTreasureFn(SC.giveTreasureMap); SO.setEnemySunkHook((e, q) => { T.onEnemySunk(e, q); CP.onEnemySunk(e, q); }); CB.setBoardFn(T.boardStrike); T.setTradeHooks({ hitEnemyShip: SO.hitEnemyShip }); EC.setEnemyShipHit(SO.hitEnemyShip); SO.setDmgFn((q, n) => CB.damagePlayer(q, n, null));
