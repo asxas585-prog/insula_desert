@@ -4,6 +4,8 @@ import * as TN from './tuna.js';
 import { formationWorld, horseMotion } from './rules.js';
 // Insula Deserta: Империя — клиент
 import * as R from './render.js';
+import { UnitRenderer } from './unit-renderer.js';
+import {crateDeckSlot} from './cargo-layout.js';
 import { THREE, scene, camera, $ } from './render.js';
 import * as MD from './models.js';
 import * as MC from './models_city.js';
@@ -169,7 +171,7 @@ function onMsg(m) {
     case 'error': loadEl.classList.add('hidden'); $('start').classList.remove('hidden'); $('startErr').textContent = m.text || 'Ошибка входа'; break;
     case 'welcome': onWelcome(m); break;
     case 's': onState(m); break;
-    case 'char': S.char = m.c; UI.syncTp(m.c.tpLeft); UI.onChar(); break;
+    case 'char': { const war=S.char?.war?.lid; S.char = m.c; if(war!==S.char?.war?.lid) {clearTacticalSelection(); if(!S.char?.war && RTS.on)toggleRts();} else {const valid=new Set(barSquads().map(q=>q.id));S.selectedSquads=(S.selectedSquads||[]).filter(id=>valid.has(id));S.selSquad=S.selectedSquads[0]||null;} UI.syncTp(m.c.tpLeft); UI.onChar(); break; }
     case 'world': S.world = m; for (const e of m.events || []) if (e.left != null) e._end = performance.now() / 1000 + e.left; syncGates(); UI.onWorld(); syncSuburbs(); break;
     case 'blds': S.blds = m.list; WG.setCityRoadCells(S.blds); syncGuildFootprints(); if (S.started) syncBuildings(); UI.onBlds(); break;
     case 'roster': S.roster = new Map(m.list.map((q) => [q.id, q])); for (const [id, o] of players) if (!S.roster.has(id)) { scene.remove(o.obj); players.delete(id); } UI.syncPvp(); for (const [id, o] of players) { const q = S.roster.get(id); if (o.lbl && q && o.lbl.userData.pvp !== !!q.pvp) { o.lbl.userData.pvp = !!q.pvp; if (o.lbl.material && o.lbl.material.color) o.lbl.material.color.set(q.pvp ? 0xff7060 : 0xffffff); } } break;
@@ -182,8 +184,9 @@ function onMsg(m) {
     case 'chest': { S.chests[m.id] = m.until; const co = chestObjs.get(m.id); if (co && m.x != null) { co.c.x = m.x; co.c.z = m.z; co.moveTo = { x: m.x, z: m.z }; } break; }
     case 'dropGone': { const d = drops.get(m.id); if (d) { scene.remove(d.obj); drops.delete(m.id); } break; }
     case 'fx': onFx(m); break;
+    case 'healCooldown': S.healReady=performance.now()/1000+m.seconds;break;
     case 'dead': UI.showDead(m); S.me.alive = false; break;
-    case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; UI.hideDead(); break;
+    case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; S.deadAt=0; UI.hideDead(); if(m.battleEnded){clearTacticalSelection();if(RTS.on)toggleRts();} break;
     case 'arenaSeated': S.seatingPending=null;S.spect=m.seat;S.horseVelocity=0;S.char.mounted=false;Object.assign(S.me,{x:m.seat.x,z:m.seat.z,y:m.seat.y,ry:m.seat.ry});UI.onBlds();UI.addLog('🪑 Вы на трибуне. E — меню арены; выход — кнопкой в меню.','info');break;
     case 'wreckBoardRejected': S.wreckBoardPending=null;break;
     case 'arenaLeft': S.seatingPending=null;S.spect=null;S.horseVelocity=0;Object.assign(S.me,{x:m.x,z:m.z,y:m.y});break;
@@ -469,7 +472,8 @@ function seatWorld(sid, seat) {
   const o = ships.get(sid); if (!o) return null;
   const u = o.obj.userData, seats = u.seats; if (!seats || !seats.length) return null;
   const i = Math.max(0, Math.min(seats.length - 1, seat | 0));
-  o.obj.updateMatrixWorld(true);
+  // Update only the root and rocking deck; oars, rigging and hull are irrelevant to a seat.
+  (u.rock || o.obj).updateWorldMatrix(true,false);
   _seatV.copy(seats[i]).applyMatrix4((u.rock || o.obj).matrixWorld);
   return { x: _seatV.x, y: _seatV.y, z: _seatV.z, ry: o.obj.rotation.y, small: o.type === 'scapha' };
 }
@@ -556,8 +560,9 @@ function syncBuilding(b) {
 
 // ---------- Жизнь города: работники хозяйств и горожане (только для красоты) ----------
 const life = [];
-let lifeKey = '';
+let lifeKey = '',lifeNext=0;
 function rebuildLife() {
+  const now=performance.now();if(now<lifeNext)return;lifeNext=now+500;
   const w = S.world || {}, idle = (w.slaves || []).filter((x) => !x.bld && !x.ship && !x.ludus && !x.squad).length;
   const key = S.blds.filter((b) => b.built && !b.ruined).map((b) => b.id + ':' + (b.workers || 0) + ':' + b.x + ':' + b.z).join(',') + '|' + (w.slaveMarket || []).length + '|' + idle;
   if (key === lifeKey) return; lifeKey = key;
@@ -641,7 +646,7 @@ let lastStateAt = 0;
 let bdKey = '', bdMeshes = [];
 function syncBoardDecks(list) {
   const key = JSON.stringify(list || []); if (key === bdKey) return; bdKey = key; WG.setBoardDecks(list || []);
-  for (const m of bdMeshes) scene.remove(m); bdMeshes = [];
+  for (const m of bdMeshes) {scene.remove(m);m.geometry.dispose();} bdMeshes = [];
   for (const d of list || []) if (d.plank) { const m = new THREE.Mesh(new THREE.BoxGeometry(d.hw * 2, 0.18, d.hl * 2), MD.M(0x8a6a44)); m.position.set(d.x, d.y - 0.1, d.z); m.rotation.y = d.ry; scene.add(m); bdMeshes.push(m); }
 }
 function onState(s) {
@@ -652,6 +657,7 @@ function onState(s) {
   S.st = s; S.serverT = s.t; S.timeAt = performance.now() / 1000; lastStateAt = performance.now();
   const [hp, mhp, st, mst, sat, alive, poison, bath] = s.me;
   Object.assign(S.me, { hp, mhp, st, mst, sat, alive: !!alive, poison: !!poison, bath: !!bath });
+  if(alive) UI.hideDead();
   if (!S.started) return;
   const seen = new Set();
   for (const a of s.p) {
@@ -768,22 +774,31 @@ function syncShips(list, map, enemy) {
       lbl.position.set(0, Math.max(5, def.len * 0.45), 0); obj.add(lbl);
       const bar = hpBar(3); bar.position.set(0, Math.max(5, def.len * 0.45) - 0.4, 0); obj.add(bar);
       obj.position.set(x, 0, z); obj.rotation.y = ry;
-      scene.add(obj); o = { obj, type, x, z, ry, tx: x, tz: z, tr: ry, speed, bar, enemy };
+      scene.add(obj); o = { id, obj, type, x, z, ry, tx: x, tz: z, tr: ry, speed, bar, enemy };
       map.set(id, o);
     }
     Object.assign(o, { tx: x, tz: z, tr: ry, speed, hpp });
     if (!enemy) { // рабы-лучники стоят на палубе
-      const info = S.world && S.world.ships.find((q) => q.id === id), na = info && info.archers ? Math.min(8, info.archers.length) : 0, n = Math.min(14, na + ((info && info.troops) || 0));
+      const info = S.world && S.world.ships.find((q) => q.id === id);syncShipCrates(o,info?.crates||[]);
+      const na = info && info.archers ? Math.min(8, info.archers.length) : 0, n = Math.min(14, na + ((info && info.troops) || 0));
       if (o.archN !== n) {
         o.archN = n; const host = o.obj.userData.rock || o.obj; for (const a2 of o.arch || []) host.remove(a2); o.arch = [];
         const seats = o.obj.userData.seats || [], L = (enemy ? D.ENEMY_SHIPS[type] : SHIPS[type]).len;
         for (let i = 0; i < n; i++) { const h = makeHumanFor('ar' + id + i, null, 0x8a7a62, null); MD.setGear(h, i < na ? { weapon: 'bow', offhand: null, head: null, body: null, legs: null } : { weapon: 'gladius', offhand: 'scutum', head: 'galea_iron', body: 'hamata', legs: null });
+          MD.animateHuman(h,1/30,{speed:0});R.optimizeStatic(h,{rigid:true});
           const sv = seats.length ? seats[(seats.length - 1 - i % seats.length + seats.length) % seats.length] : null, side = i % 2 ? 1 : -1;
           h.position.set(sv ? sv.x + side * 0.6 : side * 0.9, sv ? sv.y : 1.2, sv ? sv.z - 0.8 - Math.floor(i / 2) * 0.9 : -L * 0.25 + Math.floor(i / 2) * 1.2); host.add(h); o.arch.push(h); }
       }
     }
   }
   for (const [id, o] of map) if (!seen.has(id)) { if (enemy) spawnSplash(o.obj.position.x, o.obj.position.z, 3); scene.remove(o.obj); map.delete(id); }
+}
+
+function syncShipCrates(ship,crates){
+ const signature=crates.join('|');if(ship.crateSignature===signature)return;ship.crateSignature=signature;
+ const host=ship.obj.userData.rock||ship.obj;
+ for(const old of ship.crateMeshes||[]){host.remove(old);old.traverse(o=>{if(o.userData.compiledGeometry)o.geometry.dispose();});}
+ ship.crateMeshes=crates.map((kind,i)=>{const mesh=MD.makeTradeCrate(D.CRATES[kind]?.grade||1);R.optimizeStatic(mesh,{rigid:true});const slot=crateDeckSlot(ship.type,i,ship.obj.userData.deckY);mesh.position.set(slot.x,slot.y,slot.z);mesh.scale.setScalar(slot.scale);mesh.name='loadedTradeCrate';host.add(mesh);return mesh;});
 }
 
 // ---------- Эффекты ----------
@@ -1328,6 +1343,8 @@ function ensureMe() {
   me3 = makeHumanFor(c.id, look, c.color); applyLook(me3, look); R.optimizeStatic(me3);
   scene.add(me3); meLook = key;
 }
+const unitRenderer=new UnitRenderer(scene,o=>{const h=makeHumanFor(o.type,null,null,o.def.faction);const g=o.def.gear||{};MD.setGear(h,{weapon:g.w||null,offhand:g.off||null,head:g.head||null,body:g.body||null,legs:null,q:0});R.optimizeStatic(h);return h;},MD.animateHuman);
+let focusNext=0,tagsNext=0;
 function animHuman(obj, dt, t, s) { try { MD.animateHuman(obj, dt, s); } catch (e) { if (!animHuman.warned) { animHuman.warned = true; console.warn(e); } } }
 function loop() {
   requestAnimationFrame(loop);
@@ -1337,7 +1354,7 @@ function loop() {
   updateMe(dt);
   updateHold(dt);
   updateRanged();
-  focus = findFocus();
+  if(nowMs>=focusNext){focus=findFocus();focusNext=nowMs+80;}
   UI.setPrompt(focus && !UI.anyModal() ? focus.text : '');
   const me = S.me;
   // я
@@ -1358,6 +1375,8 @@ function loop() {
     const px = o.x, pz = o.z;
     o.x += (o.tx - o.x) * k; o.z += (o.tz - o.z) * k; o.ry = lerpAng(o.ry, o.tr, k);
     const sp = Math.hypot(o.x - px, o.z - pz) / Math.max(dt, 1e-3); o.sp += (sp - o.sp) * Math.min(1, dt * 8);
+    o.obj.visible=(o.inst||0)===(S.inst?.id||0)&&Math.hypot(o.x-camera.position.x,o.z-camera.position.z)<Math.max(180,RTS.on?RTS.dist*1.8:180);
+    if(!o.obj.visible){updateHorse('p'+o.id,null);continue;}
     const onShip = o.ship ? ships.get(o.ship) : null;
     const fl = o.fl || 0;
     const inf = S.roster.get(o.id);
@@ -1371,19 +1390,27 @@ function loop() {
     if (o.lbl) o.lbl.visible = true; fitLabel(o.lbl, o.bar, o.obj.position, 90);
   }
   // существа
+  unitRenderer.begin();
   for (const o of mobs.values()) {
     const pose=sampleMotion(o.history||[],t+(S.motionClock||0));
     if(pose){o.x=pose.x;o.z=pose.z;o.ry=pose.ry;o.sp+=(pose.speed-o.sp)*Math.min(1,dt*8);}
     { const th = WG.terrainHeight(o.x, o.z), dk = !S.inst ? WG.deckHeight(o.x, o.z, S.blds) : null; o.obj.position.set(o.x, S.inst ? S.inst.y0 : dk != null ? dk : Math.max(-0.7, th), o.z); } o.obj.rotation.y = o.ry;
     const dead = o.st === 3 ? Math.min(1, (t - o.deadT) / 1) : 0;
     const wind = o.st === 2 ? Math.min(1, o.wind + (t - S.timeAt) * 1.5) : null;
+    const distance=Math.hypot(o.x-camera.position.x,o.z-camera.position.z);
+    const visible=distance<Math.max(180,RTS.on?RTS.dist*1.8:180);
+    o.obj.visible=visible;
+    if(!visible){if(o.def.mounted)updateHorse('m'+o.id,null);continue;}
     if (o.def.human) {
       const kind = wKind(o.def.gear && o.def.gear.w);
       const atk = o.st === 2 ? { kind: o.def.ranged ? (o.def.gear.w === 'bow' ? 'bow' : 'throw') : kind, p: wind * 0.55, combo: o.id % 3 } : (o.lastWind && t - o.lastWind < 0.4 ? { kind: o.def.ranged ? (o.def.gear.w === 'bow' ? 'bow' : 'throw') : kind, p: 0.55 + (t - o.lastWind) / 0.4 * 0.45, combo: 0 } : null);
       if (o.st === 2) o.lastWind = t;
       const seat = o.def.mounted ? updateHorse('m' + o.id, 'gnedoy', o.st !== 3, o.x, o.z, o.ry, o.sp, o.obj.visible, dt, t) : null;
       if (seat != null) o.obj.position.y = seat;
-      animHuman(o.obj, dt, t, { t, speed: o.st === 6 || seat != null ? 0 : o.sp, ride: seat != null, lanceSpeed:o.sp, running: o.sp > 5, attack: o.st === 6 ? null : atk, dead, kneel: o.st === 6, hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0 });
+      const state={t,speed:o.st===6||seat!=null?0:o.sp,ride:seat!=null,lanceSpeed:o.sp,running:o.sp>5,attack:o.st===6?null:atk,dead,kneel:o.st===6,hit:o.hitT?Math.max(0,1-(t-o.hitT)*4):0};
+      const batched=(o.sq>0||o.gid)&&!dead&&o.st!==6&&distance>32&&mobs.size>=12&&!o.def.boss;
+      o.obj.userData.body.visible=!batched;
+      if(batched)unitRenderer.add(o,state);else animHuman(o.obj,dt,t,state);
     } else {
       if (o.def.critter) { try { o.obj.userData.anim && o.obj.userData.anim(dt, t, o.sp > 0.3); } catch {} if (dead) o.obj.rotation.z = dead * 1.5; }
       else try { MD.animateAnimal(o.obj, dt, { t, speed: o.sp, attack: o.st === 2 ? wind : null, dead, drink: o.st === 5 }); } catch {}
@@ -1394,6 +1421,7 @@ function loop() {
     // свои отряды: кольцо под выбранным отрядом
     if (o.sq > 0 || o.sq === 'guard') { if (!o.selRing) { o.selRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 20), new THREE.MeshBasicMaterial({ color: 0x7fdf7f, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })); o.selRing.rotation.x = -Math.PI / 2; o.selRing.position.y = 0.08; o.obj.add(o.selRing); } o.selRing.material.color.setHex((S.selectedSquads || [S.selSquad]).includes(o.sq) ? 0xffd24a : 0x7fdf7f); o.selRing.scale.setScalar(RTS.on ? 2.2 : 1); }
   }
+  unitRenderer.end(dt,t);
   // корабли
   for (const map of [ships, eships]) for (const o of map.values()) {
     // плавное движение: корабль идёт сам по скорости и курсу, а к серверной точке подтягивается мягко (без рывков камеры)
@@ -1404,7 +1432,8 @@ function loop() {
     const ed = Math.hypot(px - o.x, pz - o.z);
     if (ed > 12) { o.x = px; o.z = pz; } else { const kk = Math.min(1, dt * 2.5); o.x += (px - o.x) * kk; o.z += (pz - o.z) * kk; }
     o.obj.position.set(o.x, 0, o.z); o.obj.rotation.y = o.ry;
-    try { MD.animateShip(o.obj, t, Math.abs(o.speed)); } catch {}
+    o.obj.visible=!S.inst&&(o.id===S.ship||Math.hypot(o.x-camera.position.x,o.z-camera.position.z)<1400);
+    if(o.obj.visible)try { MD.animateShip(o.obj, t, Math.abs(o.speed)); } catch {}
     if (o.catT && o.obj.userData.catapultArm) { const k = Math.min(1, (t - o.catT) / 3.5); const u = o.obj.userData; u.catapultArm.rotation.x = (u.catapultFired ?? 0.17) + ((u.catapultRest ?? -1.35) - (u.catapultFired ?? 0.17)) * k; if (k >= 1) o.catT = 0; }
     setHp(o.bar, (o.hpp ?? 100) / 100); o.bar.visible = (o.hpp ?? 100) < 100; o.bar.quaternion.copy(camera.quaternion);
   }
@@ -1438,7 +1467,7 @@ function loop() {
   // удочка: поплавок
   updateBobber(t); animSmoke(t);
   updateLife(dt, t);
-  updateSquadTags();
+  if(nowMs>=tagsNext){updateSquadTags();tagsNext=nowMs+100;}
   updateCull(dt);
   updateEnvironment(dt, t);
   updateCamera(dt, t);
@@ -1559,10 +1588,12 @@ function updateSquadTags() {
 }
 export const RTS = { on: false, cx: 0, cz: 0, dist: 85, pitch: .78, drag: null, hover: null, preview: null, previewUntil: 0 };
 const selected = () => barSquads().filter(q => (S.selectedSquads || [S.selSquad]).includes(q.id));
+function clearTacticalSelection(){S.selectedSquads=[];S.selSquad=null;RTS.drag=null;RTS.hover=null;RTS.preview=null;ghostPoints.visible=false;UI.refreshSquadSelection();}
 export function chooseSquad(id, additive = false) {
+  if(!barSquads().some(q=>q.id===id))return; RTS.drag=null; RTS.preview=null;ghostPoints.visible=false;
   const ids = new Set(additive ? S.selectedSquads || [S.selSquad] : []);
   if (additive && ids.has(id)) ids.delete(id); else ids.add(id);
-  S.selectedSquads = [...ids].filter(Boolean); S.selSquad = S.selectedSquads[0] || null;
+  S.selectedSquads = [...ids].filter(Boolean); S.selSquad = S.selectedSquads[0] || null; UI.refreshSquadSelection();
 }
 export function toggleRts() {
   RTS.on = !RTS.on; RTS.drag = null; ghostPoints.visible = false;

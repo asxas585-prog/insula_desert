@@ -403,10 +403,10 @@ function eat(p, res) {
   if (res === 'wine') p.buffs.wine = now() + 120;
   send(p, { type: 'log', text: `Вы съели: ${RES[res].name}`, kind: 'info' }); p.dirtyChar = true;
 }
-function bandage(p) {
+export function bandage(p) {
   const c = p.char, t = now();
   if (!c.bag.bandage || t < (p.healReady || 0) || !p.alive) return;
-  takeRes(c, 'bandage', 1); p.healReady = t + 2.5; p.poison = 0;
+  takeRes(c, 'bandage', 1); p.healReady = t + RES.bandage.cooldown; send(p,{type:'healCooldown',seconds:RES.bandage.cooldown}); p.poison = 0;
   p.hp = Math.min(derivedOf(c).maxHp, p.hp + RES.bandage.heal + c.level * 2);
   fx({ kind: 'heal', x: p.x, z: p.z, pid: p.id }); p.dirtyChar = true;
 }

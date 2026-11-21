@@ -44,3 +44,10 @@ test('old additions in Messana relocate onto free city cells and retain all stoc
   assert.equal(W.plots['messana:50:50'],'alice');
   assert.deepEqual(arrangeCityAdditions(W,world.cities),[],'repeat restart must keep the corrected positions');
 });
+
+test('Messana southern gate road ends at the actual arena entrance and guild is near port',()=>{
+ const c=world.cities.find(c=>c.id==='messana'),arena=c.layout.find(b=>b.type==='amphitheatrum'),gate=c.gates.reduce((a,b)=>a.z>b.z?a:b),road=c.streets.find(s=>s.arenaApproach);
+ assert.deepEqual(road.pts[0],[gate.x,gate.z]);assert.deepEqual(road.pts[1],[arena.entrance.x,arena.entrance.z]);
+ const dx=gate.x-arena.x,dz=gate.z-arena.z,d=Math.hypot(dx,dz);assert(Math.abs(Math.cos(arena.ry)-dx/d)<1e-9);assert(Math.abs(-Math.sin(arena.ry)-dz/d)<1e-9);
+ const guild=c.layout.find(b=>b.type==='collegium'),port=c.layout.find(b=>b.type==='portus');assert(Math.hypot(guild.x-port.x,guild.z-port.z)<75);
+});

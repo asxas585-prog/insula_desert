@@ -447,8 +447,8 @@ function raidWon(e) {
 const QUEST_ENEMIES = [['wolf', 'main'], ['boar', 'main'], ['bear', 'main'], ['barb_warrior', 'main'], ['barb_archer', 'ferrum'], ['jackal', 'aegyptus'], ['snake', 'aegyptus'], ['bandit', 'cave'], ['robber', 'tomb'], ['punic_inf', 'punic'], ['deer', 'silva'], ['lion', 'aegyptus']];
 function genQuest(source='forum',city='messana',slot=0) {
   const w = W(), lvl = Math.max(1, Math.round(w.day / 2));
-  const types=source==='harbor'?['fish','deliver','sell','tunaSale']:['hunt','gather','craft','chest','camp','instance'];
-  const type = source==='harbor'?types[slot%types.length]:pick(types);
+  const types=source==='harbor'?['fish','deliver','sell','tunaSale']:['hunt','gather','craft','chest',...(G.world.camps.some(c=>!c.punic)?['camp']:[]),'instance'];
+  const type = types[slot%types.length];
   const q = { id: nid(), type, source, city, n: 1, lvl, made: Date.now() };
   const isl = (id) => (ISLANDS.find((i) => i.id === id) || {}).name || id;
   switch (type) {
@@ -472,7 +472,7 @@ export function questBoardTick(){
  for(const C of G.world.cities)for(const source of ['forum','harbor']){
   if(source==='harbor'&&!C.harbor)continue;
   let n=w.quests.filter(q=>q.city===C.id&&q.source===source).length;
-  while(n<4){const q=genQuest(source,C.id,n);if(!q)break;w.quests.push(q);n++;G.dirtyWorld=true;}
+  while(n<(source==='forum'?10:4)){const q=genQuest(source,C.id,n);if(!q)break;w.quests.push(q);n++;G.dirtyWorld=true;}
  }
 }
 const questSpot=(p,q)=>{

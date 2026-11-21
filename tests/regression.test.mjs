@@ -9,7 +9,7 @@ import * as WAR from '../rpg/wargame.js';
 import * as LG from '../rpg/logistics.js';
 import * as RT from '../rpg/routes.js';
 import * as SO from '../rpg/society.js';
-import { troopStats, formationWorld, horseMotion } from '../public/rpg/rules.js';
+import { troopStats, formationWorld, horseMotion, battleDeployment } from '../public/rpg/rules.js';
 import { createTroop } from '../rpg/troops.js';
 import { credentials,passwordRecord,verifySecret } from '../rpg/auth.js';
 import { hasCityOffice } from '../rpg/access.js';
@@ -47,7 +47,7 @@ check('ranged AI actually emits a projectile above the ground',()=>{const p=play
 check('artillery emits a bolt with the same friendly-fire rules',()=>{player();const a=CB.spawnMob('rom_art',8,0),e=CB.spawnMob('punic_inf',24,0);a.state='wind';a.windEnd=0;a.target={kind:'mob',id:e.id};CB.updateMobs(.05);assert.equal([...G.proj.values()].find(p=>p.owner===a.id)?.kind,'bolt');});
 check('commander can personally hit opposing Roman units',()=>{const p=player();p.war={lid:1,team:'A'};const e=CB.spawnMob('rom_inf',0,0);e.team='B';e.war=1;CB.hitMob(e,20,p);assert(e.hp<e.maxHp);});
 check('mercenary slingers really are ranged',()=>{assert(D.ENEMIES[D.SQUADS.merc_l.unit].ranged);assert(D.ENEMIES[D.SQUADS.merc_l.unit].range>20);});
-check('bot and player use identical squad statistics including armor and movement',()=>{const p=player();p.char.level=10;p.char.squads=[{id:10,type:'cav',name:'Cav',lvl:6,up:{arm:5,wpn:5,drill:5},live:[]}];WAR.warMsg(p,{type:'warCreate',mode:'pvb'});const a=[...G.mobs.values()].find(m=>m.team==='A'),b=[...G.mobs.values()].find(m=>m.team==='B');for(const field of ['maxHp','dmg','armor','speed','lvl','type'])assert.equal(a[field],b[field],field);assert(a.def.mounted&&b.def.mounted);});
+check('field bots mirror player army but have weaker health damage and armor',()=>{const p=player();p.char.level=10;p.char.squads=[{id:10,type:'cav',name:'Cav',lvl:6,up:{arm:5,wpn:5,drill:5},live:[]}];WAR.warMsg(p,{type:'warCreate',mode:'pvb'});const a=[...G.mobs.values()].find(m=>m.team==='A'),b=[...G.mobs.values()].find(m=>m.team==='B');assert.equal(b.maxHp,Math.round(a.maxHp*.8));assert.equal(b.dmg,a.dmg*.8);assert.equal(b.armor,a.armor*.85);for(const field of ['speed','lvl','type'])assert.equal(a[field],b[field],field);assert(a.def.mounted&&b.def.mounted);});
 check('formation preview math matches squad destination slots',()=>{const p=player();const sq={id:10,type:'inf',mode:'move',form:'tight',columns:3,pt:{x:10,z:20,ry:1},live:[]};p.char.squads=[sq];const m=createTroop('inf',0,0,{level:1});m.squad={owner:p.char.id,sq:10,slot:4,n:6};sq.live=[m.id];const actual=AR.squadSlot(m),expected=formationWorld(4,6,'tight',3,10,20,1);assert.equal(actual.x,expected.x);assert.equal(actual.z,expected.z);});
 check('horse must accelerate and cannot turn on the spot at full gallop',()=>{const start=horseMotion(0,0,0,true,true,'numida',.1);assert(start.speed<=.35+.001);const turn=horseMotion(11,0,Math.PI,true,true,'numida',.1);assert(turn.heading<.1);assert(turn.speed<11);});
 check('housing is real capacity and workers are assigned to quarters',()=>{const p=player();const b=building('quarters',p.char.id);G.W.slaves=Array.from({length:5},(_,id)=>({id:id+1,owner:p.char.id}));LG.housingTick();assert.equal(LG.housingCapacity(p.char),10);assert(G.W.slaves.every(s=>s.housed&&s.home===b.id));});
@@ -77,3 +77,59 @@ check('passenger cannot sell somebody else hold cargo at an overseas port',()=>{
 
 check('automatic crate orders use city warehouse beyond local post radius',()=>{const p=player(),post=building('statio',p.char.id,1),wh=building('warehouse',p.char.id,2,200);post.orders={crate1:1};wh.store={...D.CRATES.crate1.in};RT.routesTick(60);assert.equal(post.crates.crate1,1);assert(Object.values(wh.store).every(n=>n===0));});
 check('automatic crate orders cannot consume another city warehouse',()=>{const p=player(),post=building('statio',p.char.id,1),wh=building('warehouse',p.char.id,2,1000,'catana');post.orders={crate1:1};wh.store={...D.CRATES.crate1.in};RT.routesTick(60);assert.equal(post.crates.crate1,undefined);assert.deepEqual(wh.store,D.CRATES.crate1.in);});
+
+check('finishing a field battle revives a dead commander and explicitly closes the death screen',()=>{
+ const p=player();p.char.squads=[{id:10,type:'inf',name:'Inf',lvl:1,up:{},live:[]}];WAR.warMsg(p,{type:'warCreate',mode:'pvb'});
+ const lid=p.war.lid;p.alive=false;p.hp=0;p.deadAt=now();for(const m of G.mobs.values())if(m.team==='B')m.hp=0;
+ WAR.warTick();assert.equal(p.war,null);assert.equal(p.alive,true);assert.equal(p.hp,D.derived(p.char).maxHp);assert.equal(p.deadAt,0);
+ assert(p.msgs.some(m=>m.type==='respawn'&&m.battleEnded));assert(!p.char.squads.some(s=>s.war));assert(p.char.squads.some(s=>s.id===10));
+ assert(!G.war.lobbies.has(lid));assert.equal(G.mobs.size,0);assert.equal(WAR.warSpawnOf(p),null);
+});
+check('a stale field lobby cannot crash ordinary respawn',()=>{const p=player();p.war={lid:999,team:'A'};assert.equal(WAR.warSpawnOf(p),null);});
+check('armies deploy on matching lanes and face their opponents on a rotated battlefield',()=>{
+ const yaw=.73,F={x:100,z:-200,r:70,a:{x:100-Math.sin(yaw)*48,z:-200-Math.cos(yaw)*48},b:{x:100+Math.sin(yaw)*48,z:-200+Math.cos(yaw)*48}};
+ for(let size=1;size<=3;size++)for(let k=0;k<size;k++)for(let g=0;g<4;g++){
+  const a=battleDeployment(F,'A',k,size,g,4),b=battleDeployment(F,'B',k,size,g,4);
+  assert(Math.abs((b.x-a.x)*Math.cos(yaw)-(b.z-a.z)*Math.sin(yaw))<1e-8);
+  assert(Math.abs(Math.cos(a.ry-b.ry)+1)<1e-8);assert(Math.hypot(a.x-F.x,a.z-F.z)<F.r);
+ }
+});
+check('every temporary player unit starts facing the enemy in its holding formation',()=>{
+ const p=player();p.char.squads=[{id:10,type:'inf',name:'Inf',lvl:1,up:{},live:[]}];WAR.warMsg(p,{type:'warCreate',mode:'pvb'});
+ for(const m of G.mobs.values()){const sq=p.char.squads.find(s=>s.id===m.squad?.sq);if(sq){const pos=AR.squadSlot(m);assert(Math.hypot(m.x-pos.x,m.z-pos.z)<1e-7);assert.equal(m.ry,p.ry);}else assert(Math.cos(m.ry-p.ry)<-.99);}
+});
+check('forum always contains ten quests per city and harbour keeps its separate board',()=>{
+ G.world.cities[0].harbor=true;SO.questBoardTick();for(const c of G.world.cities)assert.equal(G.W.quests.filter(q=>q.city===c.id&&q.source==='forum').length,10);
+ assert.equal(G.W.quests.filter(q=>q.source==='harbor').length,4);const ids=G.W.quests.map(q=>q.id),at=G.W.questsAt;SO.questBoardTick();assert.deepEqual(G.W.quests.map(q=>q.id),ids);assert.equal(G.W.questsAt,at);
+ G.W.questsAt=Date.now()-1;SO.questBoardTick();assert(!G.W.quests.some(q=>ids.includes(q.id)));assert.equal(G.W.quests.filter(q=>q.source==='forum').length,20);
+});
+check('buyer hours include late evening and early morning but exclude the forty minute break',()=>{
+ function gt(h){const f=h>=3?(h-3)/(23+55/60-3)*(2/3):(2/3)+(h+24-(23+55/60))/(24-(23+55/60)+3)/3;return f*D.CFG.dayLength;}
+ for(const h of [0, .32,23+40/60,23.67,23.9])assert.equal(D.buyerOpen(gt(h)),false,String(h));
+ for(const h of [20/60,.34,1,3,12,23.65])assert.equal(D.buyerOpen(gt(h)),true,String(h));assert(D.MARKET_GOODS.includes('plank'));
+});
+check('buyer sells planks using the shared server catalogue',()=>{const p=player();building('mercator',null,1);G.W.events=[];G.W.time=350;p.char.den=1000;const n=p.char.bag.plank||0;EC.buy(p,'plank',2);assert.equal(p.char.bag.plank,n+2);});
+check('bandages enforce a three second server cooldown without consuming a second item',async()=>{
+ const {bandage}=await import('../rpg/game.js');const p=player();p.hp=1;p.char.bag.bandage=5;bandage(p);
+ assert.equal(p.char.bag.bandage,4);assert(p.healReady-now()>2.9&&p.healReady-now()<=3);assert.deepEqual(p.msgs.find(m=>m.type==='healCooldown'),{type:'healCooldown',seconds:3});
+ const hp=p.hp;bandage(p);assert.equal(p.hp,hp);assert.equal(p.char.bag.bandage,4);p.healReady=now()+.01;bandage(p);assert.equal(p.char.bag.bandage,4);p.healReady=now()-.01;bandage(p);assert.equal(p.char.bag.bandage,3);
+});
+
+check('idle soldiers respect target scan cooldown instead of scanning every server tick',()=>{
+ const p=player(),m=CB.spawnMob('legionary',0,0);m.nextAct=now()+100;m.def={...m.def};let scans=0;const aggro=m.def.aggro;Object.defineProperty(m.def,'aggro',{get(){scans++;return aggro;}});
+ for(let i=0;i<20;i++)CB.updateMobs(.05);assert(scans<=2,`unexpected scans: ${scans}`);assert.equal(m.target,null);
+});
+
+check('all trade crate slots fit on decks and do not overlap each other',async()=>{
+ const {crateDeckSlot}=await import('../public/rpg/cargo-layout.js');
+ for(const[type,def]of Object.entries(D.SHIPS)){const slots=Array.from({length:def.crates||0},(_,i)=>crateDeckSlot(type,i,1));
+  for(const a of slots){assert(a.y>1);assert(Math.abs(a.z)+.3*a.scale<def.len/2);assert(Math.abs(a.x)+.4*a.scale<def.len*.25);}
+  for(let i=0;i<slots.length;i++)for(let j=i+1;j<slots.length;j++){const a=slots[i],b=slots[j];assert(Math.abs(a.x-b.x)>=.4*(a.scale+b.scale)||Math.abs(a.z-b.z)>=.3*(a.scale+b.scale));}
+ }
+});
+
+check('a bot beside a human mirrors the player opposite its own deployment lane',()=>{
+ const a=player('a'),b=player('b'),c=player('c');a.char.squads=[{id:10,type:'inf',name:'Inf',lvl:1,up:{},live:[]}];b.char.level=20;b.char.squads=[{id:20,type:'cav',name:'Cav',lvl:4,up:{arm:3},live:[]}];c.char.squads=[{id:30,type:'arch',name:'Arch',lvl:1,up:{},live:[]}];
+ WAR.warMsg(a,{type:'warCreate',size:2,zone:0});const id=[...G.war.lobbies.keys()][0];WAR.warMsg(b,{type:'warJoin',id,side:'A'});WAR.warMsg(c,{type:'warJoin',id,side:'B'});WAR.warMsg(a,{type:'warBot',id,side:'B',on:true});
+ const bot=[...G.mobs.values()].find(m=>m.warBot),opponent=[...G.mobs.values()].find(m=>m.squad?.owner===b.char.id);assert(bot);assert.equal(bot.type,opponent.type);assert.equal(bot.lvl,opponent.lvl);assert.equal(bot.maxHp,Math.round(opponent.maxHp*.8));
+});

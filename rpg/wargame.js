@@ -1,8 +1,8 @@
 // Поле Марса (Бруттий, напротив Мессаны): бои армиями между игроками и ботами — лобби у распорядителя игр,
 // бой на время, армии временные (потери не сохраняются), военные очки и рейтинг полководцев.
-import { G, D, WG, now, dist, rand, nid, send, log, broadcast } from './state.js';
+import { G, D, WG, now, dist, rand, nid, send, log, broadcast, derivedOf } from './state.js';
 import { createTroop } from './troops.js';
-import { squadSize, troopLevel, formationWorld } from '../public/rpg/rules.js';
+import { squadSize, troopLevel, formationWorld, battleDeployment } from '../public/rpg/rules.js';
 
 const W = () => G.W;
 const war = () => (G.war = G.war || { lobbies: new Map() });
@@ -82,9 +82,8 @@ function tryStart() { // на каждом из четырёх полей — с
 }
 // армия игрока: копии его собственных отрядов (тех же видов, численности и улучшений); потери не сохраняются
 function spawnArmy(L, p, team, k) {
-  const F = fieldOf(L), sp = team === 'A' ? F.a : F.b, c = p.char;
-  const ox = (k - 1) * 14, enemy = team === 'A' ? F.b : F.a; p.ry = Math.atan2(enemy.x - sp.x, enemy.z - sp.z);
-  p.x = sp.x + ox * 0.3; p.z = sp.z + ox; p.mounted = false; p.hp = p.hp > 0 ? p.hp : 1;
+  const F = fieldOf(L), c = p.char, pos = battleDeployment(F,team,k,L.size);
+  Object.assign(p,pos); p.mounted = false; p.hp = p.hp > 0 ? p.hp : 1;
   send(p, { type: 'teleport', x: p.x, z: p.z, text: `⚔ Бой начался на поле «${F.name}»! Вы — ${team === 'A' ? 'Запад' : 'Восток'}. Победа — разбить все отряды врага или удержать точку в центре ${CAP.need} с. 1–5 — отряд, Z — вид сверху (ПКМ — приказ).` });
   c.squads = c.squads || [];
   for (const q of own(c)) { for (const id of q.live || []) G.mobs.delete(id); q.live = []; }
@@ -92,12 +91,12 @@ function spawnArmy(L, p, team, k) {
   c.warRent = (c.warRent || []).filter((q) => !mine.includes(q)); c.warPick = []; // аренда — на один бой
   L.armies = L.armies || {}; L.armies[p.id] = mine.map((q) => ({ type: q.type, n: squadSize(q), lvl: troopLevel(c, q), traits: (q.slaves || []).map(id => G.W.slaves.find(sl => sl.id === id)?.trait || null), up: { ...(q.up || {}) }, name: q.name })); // бот напротив повторит и численность, и силу
   mine.forEach((q0, gi) => {
-    const n = L.armies[p.id][gi].n, up = q0.up || {};
-    const sq = { id: nid(), type: q0.type, war: L.id, nominalSize: n, name: `${q0.name}`, up: { ...up }, xp: 0, lvl: q0.lvl || 1, form: 'line', mode: 'follow', live: [], lost: 0, kills: 0 };
+    const n = L.armies[p.id][gi].n, up = q0.up || {}, anchor = battleDeployment(F,team,k,L.size,gi,mine.length);
+    const sq = { id: nid(), type: q0.type, war: L.id, nominalSize: n, name: `${q0.name}`, up: { ...up }, xp: 0, lvl: q0.lvl || 1, form: 'line', mode: 'hold', columns: 6, pt: {...anchor}, live: [], lost: 0, kills: 0 };
     for (let i = 0; i < n; i++) {
-      const lat = gi === 0 ? 0 : (gi % 2 ? -1 : 1) * Math.ceil(gi / 2) * 14, gx = p.x + Math.cos(p.ry || 0) * (lat + (i % 6 - 2.5) * 2.2), gz = p.z - Math.sin(p.ry || 0) * (lat + (i % 6 - 2.5) * 2.2) - 6 - Math.floor(i / 6) * 2.4;
+      const {x:gx,z:gz} = formationWorld(i,n,'line',6,anchor.x,anchor.z,anchor.ry);
       const m = createTroop(q0.type, gx, gz, { level: L.armies[p.id][gi].lvl, up, trait: L.armies[p.id][gi].traits[i], team, war: L.id, src: { kind: 'squad', owner: c.id, sq: sq.id, war: L.id } });
-      if (!m) continue; m.team = team; m.war = L.id; m.squad = { owner: c.id, sq: sq.id, slot: i, n }; m.gname = `${c.name}: ${sq.name}`;
+      if (!m) continue; m.ry = anchor.ry; m.team = team; m.war = L.id; m.squad = { owner: c.id, sq: sq.id, slot: i, n }; m.gname = `${c.name}: ${sq.name}`;
       sq.live.push(m.id); L.units.push(m.id);
     }
     c.squads.push(sq);
@@ -105,16 +104,18 @@ function spawnArmy(L, p, team, k) {
   p.war = { lid: L.id, team }; p.dirtyChar = true;
 }
 function spawnBot(L, team, k, mirror) {
-  const F = fieldOf(L), sp = team === 'A' ? F.a : F.b, dest = team === 'A' ? F.b : F.a;
-  const ry = Math.atan2(dest.x - sp.x, dest.z - sp.z);
+  const F = fieldOf(L);
   const army = mirror?.length ? mirror : D.WAR.army.map(([type, n]) => ({ type, n, lvl: 6, up: {} }));
   army.forEach((a, g) => {
-    const side = (g % 2 ? -1 : 1) * Math.ceil(g / 2) * 16 + (k - 1) * 40;
+    const anchor = battleDeployment(F,team,k,L.size,g,army.length), ry=anchor.ry;
     for (let i = 0; i < a.n; i++) {
-      const pt = formationWorld(i, a.n, 'line', 6, sp.x + Math.cos(ry) * side, sp.z - Math.sin(ry) * side, ry);
+      const pt = formationWorld(i, a.n, 'line', 6, anchor.x, anchor.z, ry);
       const m = createTroop(a.type, pt.x, pt.z, { level: a.lvl, up: a.up, trait: a.traits?.[i], team, war: L.id, leash: 400, src: { kind: 'war', lid: L.id } });
+      if(!m) continue; m.ry=ry; m.warBot=true;
+      m.hp=m.maxHp=Math.max(1,Math.round(m.maxHp*D.WAR.botScale.hp));
+      m.dmg*=D.WAR.botScale.damage; m.armor*=D.WAR.botScale.armor;
       m.grp = { id: `b${L.id}${team}${k}_${g}` }; m.gname = `Армия противника: ${D.SQUADS[a.type].name}`;
-      m.warDest = { x: F.x + Math.cos(ry) * side * .4, z: F.z - Math.sin(ry) * side * .4 }; L.units.push(m.id);
+      m.warDest = { x: F.x + (anchor.x-F.x)*.2, z: F.z + (anchor.z-F.z)*.2 }; L.units.push(m.id);
     }
   });
 }
@@ -123,8 +124,8 @@ function start(L) {
   L.state = 'fight'; L.until = now() + D.WAR.time; L.units = []; L.cap = { A: 0, B: 0 };
   L.A.forEach((pid, i) => { const p = plOf(pid); if (p) spawnArmy(L, p, 'A', i); });
   L.B.forEach((pid, i) => { const p = plOf(pid); if (p) spawnArmy(L, p, 'B', i); });
-  for (let i = 0; i < (L.botB || 0); i++) spawnBot(L, 'B', i, L.armies[L.A[i] ?? L.A[0]]);
-  for (let i = 0; i < (L.botA || 0); i++) spawnBot(L, 'A', i, L.armies[L.B[i] ?? L.B[0]]);
+  for (let i = 0; i < (L.botB || 0); i++) spawnBot(L, 'B', L.B.length+i, L.armies[L.A[L.B.length+i] ?? L.A[0]] || Object.values(L.armies)[0]);
+  for (let i = 0; i < (L.botA || 0); i++) spawnBot(L, 'A', L.A.length+i, L.armies[L.B[L.A.length+i] ?? L.B[0]] || Object.values(L.armies)[0]);
   log(`🏟 На Поле Марса («${fieldOf(L).name}») начался бой ${L.size} на ${L.size} (${Math.round(D.WAR.time / 60)} мин).`, 'warn');
   G.dirtyWorld = true;
 }
@@ -157,14 +158,15 @@ function finish(L, win, a, b, byCap = false) {
     c.squads = (c.squads || []).filter((sq) => sq.war !== L.id); p.war = null;
     const v = G.world.war.village; p.x = v.x + rand(-5, 5); p.z = v.z + rand(-5, 5);
     send(p, { type: 'teleport', x: p.x, z: p.z, text: `🏟 Бой окончен: ${res === 1 ? 'ПОБЕДА' : res === 0 ? 'поражение' : 'ничья'}${byCap ? ' — точка в центре захвачена' : ''} (осталось воинов: ${team === 'A' ? a : b} против ${team === 'A' ? b : a}). +${mil} военных очков, рейтинг ${R.r} (${dR >= 0 ? '+' : ''}${dR}).` });
-    if (!p.alive) { p.alive = true; p.hp = 1; }
+    const stats=derivedOf(c); p.alive=true; p.hp=stats.maxHp; p.st=stats.maxSt; p.deadAt=0; p.block=false; p.mounted=false; p.godUntil=now()+3;
+    send(p,{type:'respawn',x:p.x,z:p.z,battleEnded:true});
     p.dirtyChar = true;
   }
   log(`🏟 Поле Марса (${L.size} на ${L.size}) — ${win ? `победа стороны ${win === 'A' ? 'Запада' : 'Востока'}` : 'ничья'} (${a} : ${b}).`, 'info');
   Wr.lobbies.delete(L.id); G.dirtyWorld = true;
 }
 // павший в бою полководец не теряет деньги и встаёт у своего края поля
-export function warSpawnOf(p) { if (!p.war) return null; const L = war().lobbies.get(p.war.lid), F = L ? fieldOf(L) : G.world.war.field, sp = p.war.team === 'A' ? F.a : F.b; return { x: sp.x + rand(-3, 3), z: sp.z + rand(-3, 3) }; }
+export function warSpawnOf(p) { if (!p.war) return null; const L=war().lobbies.get(p.war.lid); if(!L || L.state!=='fight') return null; const pos=battleDeployment(fieldOf(L),p.war.team,Math.max(0,L[p.war.team].indexOf(p.id)),L.size); return {x:pos.x,z:pos.z}; }
 export function warPlayerGone(p) { // вышел из игры во время боя или записи
   const Wr = war();
   for (const L of Wr.lobbies.values()) { if (L.state === 'wait') { L.A = L.A.filter((x) => x !== p.id); L.B = L.B.filter((x) => x !== p.id); if (!L.A.length && !L.B.length) Wr.lobbies.delete(L.id); } }

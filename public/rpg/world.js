@@ -507,6 +507,26 @@ function genCities(W, rnd, addPoi) {
     // переулки: от входа каждого здания к ближайшей главной улице
     // New civic buildings follow the same cell grid as player construction.
     avenue('collegium');
+    if(C.id==='messana'){
+      const arena=C.layout.find(b=>b.type==='amphitheatrum'),gate=C.gates.reduce((a,b)=>a.z>b.z?a:b);
+      // The amphitheatre gates lie on local X, not on the facade's usual +Z axis.
+      if(arena&&gate){arena.ry=Math.atan2(gate.x-arena.x,gate.z-arena.z)-Math.PI/2;
+        const entrance=[arena.x+Math.cos(arena.ry)*45.2,arena.z-Math.sin(arena.ry)*45.2];
+        C.streets.push({w:8,pts:[[gate.x,gate.z],entrance],arenaApproach:true});arena.entrance={x:entrance[0],z:entrance[1]};
+      }
+      const guild=C.layout.find(b=>b.type==='collegium'),port=C.layout.find(b=>b.type==='portus');
+      if(guild&&port){let best=null,score=Infinity;const n=cellsOf('collegium'),r=BUILDINGS.collegium.r;
+        for(let i=-30;i<=30;i++)for(let j=-30;j<=30;j++){
+          const [x,z]=cityPt(C,(i+n/2)*CELL,(j+n/2)*CELL),d=Math.hypot(x-port.x,z-port.z);
+          if(d>=score||Math.hypot(x-C.x,z-C.z)>C.R-12)continue;
+          const[u,v]=cityLocal(C,x,z);if(Math.abs(u)<r+6||Math.abs(v)<r+6)continue;
+          if(terrainHeight(x,z)<1.2||slopeAt(x,z,r*.8).d>3||portOverlap(x,z,r,[port]))continue;
+          if(C.layout.some(b=>b!==guild&&Math.hypot(x-b.x,z-b.z)<r+(BUILDINGS[b.type]?.r||4)+3))continue;
+          best={x,z,ry:C.ry+Math.PI};score=d;
+        }
+        if(best)Object.assign(guild,best,{guildRelocated:true,avenue:false});
+      }
+    }
     extendCivicAvenues(C);
 
     for (const L of C.layout) {

@@ -94,8 +94,13 @@ export function floatText(x, y, z, text, color = '#fff', big = false) {
 export function hurtFlash() { const h = $('hurt'); h.style.transition = 'none'; h.style.opacity = '1'; requestAnimationFrame(() => { h.style.transition = 'opacity 0.6s'; h.style.opacity = '0'; }); }
 export function levelUp(m) { toast(`⭐ Уровень ${m.level}! Очков характеристик: ${m.points} (C — персонаж)`, true); }
 export function questDone(m) { toast(`✔ Задание выполнено: ${m.title}`, true); addLog(`Награда: ${m.reward.den} ден., ${m.reward.xp} опыта, ${m.reward.dig} достоинства, ${m.reward.office||0} очков должности (${esc(m.cityName||m.city||'Мессана')})`, 'good'); }
-export function showDead(m) { $('deadBox').classList.remove('hidden'); $('deadText').textContent = `${m.by ? 'Вас сразил(а): ' + m.by + '. ' : ''}Потеряно ${m.lost} денариев. Возрождение через ${m.t} с…`; }
-export function hideDead() { $('deadBox').classList.add('hidden'); }
+let deadTimer = null;
+export function showDead(m) {
+  hideDead(); $('deadBox').classList.remove('hidden'); const until=performance.now()+Math.max(0,m.t||0)*1000;
+  const update=()=>{const left=Math.max(0,Math.ceil((until-performance.now())/1000)); $('deadText').textContent=`${m.by ? 'Вас сразил(а): '+m.by+'. ' : ''}Потеряно ${m.lost||0} денариев. ${left ? 'Возрождение через '+left+' с…' : 'Ожидание возрождения…'}`;};
+  update(); deadTimer=setInterval(update,250);
+}
+export function hideDead() { clearInterval(deadTimer); deadTimer=null; $('deadBox').classList.add('hidden'); }
 export function setPrompt(t) { setHTML($('prompt'), esc(t)); }
 export function showHold(p) { $('holdRing').classList.toggle('hidden', !p); if (p) $('holdArc').style.strokeDashoffset = String(100.5 * (1 - p)); }
 export function npcDialog(m) {
@@ -974,11 +979,11 @@ function shopHtml(goods, gear, sellAll = true, where = null, o = {}) {
   const sk = Object.entries(c.bag).filter(([k, n]) => n >= 1 && RES[k] && (!o.only || o.only.includes(k))).map(([k]) => k);
   const sell = grouped(sk, (k) => { const n = c.bag[k]; return `<div class="row"><span class="grow">${resName(k)} <span class="muted">×${Math.floor(n)}</span></span><span class="nm">${sellP(k)} ден.${where && PORTS[where].mult[k] ? ' ↑' : ''}</span><button class="btn sm" data-a="sell" data-res="${k}" data-n="1">1</button><button class="btn sm" data-a="sell" data-res="${k}" data-n="${Math.floor(n)}">Всё</button></div>`; }) || '<div class="muted">Нечего продать</div>';
   const sg = sellAll ? c.items.filter((it) => !GEAR[it.k].bound).map((it) => `<div class="row"><span class="grow itemName">${gearName(it)}</span><span class="nm">${Math.round(GEAR[it.k].p * 0.35 * QUALITY[it.q || 0].mul)} ден.</span><button class="btn sm alt" data-a="sellGear" data-uid="${it.uid}">Продать</button></div>`).join('') : '';
-  const closed = o.hours && !o.hours.open ? `<div class="card" style="border-color:var(--red,#a33)">🕛 Скупщик открыт с ${o.hours.from}:00 до ${o.hours.to}:00 — сейчас закрыто.</div>` : '';
+  const closed = o.hours && !o.hours.open ? `<div class="card" style="border-color:var(--red,#a33)">🕛 Скупщик открыт с 00:20 до 23:40 — сейчас закрыто.</div>` : '';
   const sw = `<div class="subtabs"><button class="btn sm ${shopSub === 'buy' ? 'good' : 'alt'}" data-a="shopSub" data-k="buy">🛒 Купить · у вас ${c.den} ден.</button><button class="btn sm ${shopSub === 'sell' ? 'good' : 'alt'}" data-a="shopSub" data-k="sell">💰 Продать${w.laws.trade_tax ? ` · налог ${LAWS.trade_tax.opts[w.laws.trade_tax]}` : ''}</button></div>`;
   return closed + sw + (shopSub === 'buy' ? `<div class="sgrid">${buy}</div>` : `<div class="sgrid">${sell}${sg ? `<div class="sgrp"><h4>⚔ Снаряжение</h4>${sg}</div>` : ''}</div>`);
 }
-const MARKET_GOODS = ['wood', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
+const MARKET_GOODS = D.MARKET_GOODS;
 const MARKET_GEAR = D.MARKET_GEAR;
 function marketPanel(b) {
   const w = S.world, c = S.char;
@@ -1509,7 +1514,7 @@ function renderHUD() {
     ['ЛКМ', w ? (w.kind === 'rod' ? '🎣' : w.kind === 'bow' ? '🏹' : '⚔') : '👊', w ? w.name.split(' (')[0] : 'Кулаки', w && w.kind === 'bow' ? c.bag.arrow || 0 : ''],
     ['ПКМ', '🛡', c.gear.offhand ? 'Блок щитом' : 'Блок', ''],
     ['F', '↗', 'Пилум', c.bag.pilum || 0],
-    ['R', '🩹', 'Перевязка', c.bag.bandage || 0],
+    ['R', '🩹', (S.healReady||0)>performance.now()/1000 ? `Перевязка · ${Math.ceil(S.healReady-performance.now()/1000)} с` : 'Перевязка', c.bag.bandage || 0],
     ['Y', '🍞', 'Еда', food],
     ['Q', '↻', 'Перекат', ''],
   ].map(([k, ic, t, n]) => `<div class="slot"><span class="k">${k}</span>${n !== '' ? `<span class="n">${Math.floor(n)}</span>` : ''}<span class="ic">${ic}</span><span class="t">${esc(t)}</span></div>`).join(''));
@@ -1525,7 +1530,12 @@ function squadBar(ents) {
     return `<div class="sqi ${(S.selectedSquads || [S.selSquad]).includes(q.id) ? 'sel' : ''} ${st.n ? '' : 'off'}" data-sq="${q.id}" title="${esc(q.name)} — ${SQ.name || ''}. Щелчок — выбрать. В виде сверху (Z): ПКМ по земле — идти, ПКМ по врагу — атаковать.">${i < 5 ? `<span class="k">${i + 1}</span>` : ''}<span class="md">${st.n ? MODE_IC[q.mode] || '' : q.homeAway ? '🏠' : '💤'}</span><div class="ic">${SQ.icon || '⚔'}</div><div class="nm">${esc(q.name)}</div><div class="cnt">👥 ${st.n}/${size}</div><div class="hb"><div style="width:${Math.min(100,hpPct)}%"></div></div><div class="details">${Math.round(hpPct)}% HP${q.stats ? ` · ⚔ ${Math.round(q.stats.damage)} · ◈ ${Math.round(q.stats.armor)}<br>Дальность ${q.stats.range} · ход ${q.stats.speed.toFixed(1)}` : ''}</div>${st.n ? `<div class="sqb"><button data-sqa="attack" data-id="${q.id}" title="Атаковать ближайшего врага" class="${q.mode === 'attack' ? 'on' : ''}">⚔</button><button data-sqa="hold" data-id="${q.id}" title="Стоять — держать оборону на месте" class="${q.mode === 'hold' ? 'on' : ''}">🛡</button><button data-sqa="form" data-id="${q.id}" data-f="${fm ? 'line' : 'tight'}" title="${fm ? 'Строй плечом к плечу (вкл.) — разомкнуть' : 'Сомкнуть строй плечом к плечу'}" class="${fm ? 'on' : ''}">▦</button><button data-sqa="follow" data-id="${q.id}" title="За мной" class="${q.mode === 'follow' ? 'on' : ''}">👣</button><button data-home="${q.id}" title="Отправить домой">🏠</button></div>` : ''}</div>`; }).join('');
   setHTML(el, h);
 }
-$('squadBar') && $('squadBar').addEventListener('click', (e) => { const sa = e.target.closest('[data-sqa]'); if (sa) { const id = Number(sa.dataset.id); if (!(S.selectedSquads || [S.selSquad]).includes(id)) C.chooseSquad(id); if (sa.dataset.sqa === 'form') net({ type: 'squadOrder', id, form: sa.dataset.f }); else net({ type: 'squadOrder', id, mode: sa.dataset.sqa }); e.stopPropagation(); return; } const hb = e.target.closest('[data-home]'); if (hb) { net({ type: 'squadHome', id: Number(hb.dataset.home) }); e.stopPropagation(); return; } const b = e.target.closest('[data-sq]'); if (!b) return; C.chooseSquad(Number(b.dataset.sq), e.shiftKey || e.ctrlKey); });
+export function refreshSquadSelection() {
+  for(const card of $('squadBar')?.querySelectorAll('[data-sq]') || []) card.classList.toggle('sel',(S.selectedSquads || []).includes(Number(card.dataset.sq)));
+}
+function squadBarAction(e) { const sa = e.target.closest('[data-sqa]'); if (sa) { const id = Number(sa.dataset.id); if (!(S.selectedSquads || [S.selSquad]).includes(id)) C.chooseSquad(id); if (sa.dataset.sqa === 'form') net({ type: 'squadOrder', id, form: sa.dataset.f }); else net({ type: 'squadOrder', id, mode: sa.dataset.sqa }); e.stopPropagation(); return; } const hb = e.target.closest('[data-home]'); if (hb) { net({ type: 'squadHome', id: Number(hb.dataset.home) }); e.stopPropagation(); return; } const b = e.target.closest('[data-sq]'); if (!b) return; C.chooseSquad(Number(b.dataset.sq), e.shiftKey || e.ctrlKey); }
+$('squadBar')?.addEventListener('pointerdown',e=>{if(e.button!==0)return; e.preventDefault(); e.stopPropagation(); squadBarAction(e);});
+$('squadBar')?.addEventListener('click',e=>{e.stopPropagation(); if(e.detail===0)squadBarAction(e);});
 export function frame(dt, t, ents) {
   fishTick(dt);
   updatePlacing();

@@ -75,7 +75,7 @@ export const RES = {
   amphora: { name: 'Амфоры', w: 1.5, p: 10, icon: '⚱' },
   arrow: { name: 'Стрелы', w: 0.05, p: 1, icon: '➶' },
   pilum: { name: 'Пилумы', w: 1, p: 12, icon: '↗' },
-  bandage: { name: 'Перевязки', w: 0.1, p: 10, icon: '🩹', heal: 45 },
+  bandage: { name: 'Перевязки', w: 0.1, p: 10, icon: '🩹', heal: 45, cooldown: 3 },
   gem: { name: 'Самоцветы', w: 0.1, p: 120, icon: '💎' },
   gold: { name: 'Египетское золото', w: 0.5, p: 160, icon: '🟡' },
   artifact: { name: 'Древности', w: 0.5, p: 90, icon: '🏺' },
@@ -238,7 +238,7 @@ export const BUILDINGS = {
   forum_m: { name: 'Форум Мессаны', pub: true, muni: true, r: 36, cost: { stone: 150, marble: 30, plank: 50 }, desc: 'Большой форум на перекрёстке кардо и декуманус: ростры для речей, место голосований, ряды рыночных лавок.' },
   curia: { name: 'Курия (ратуша)', pub: true, muni: true, r: 9, cost: { brick: 40, stone: 40, marble: 10 }, desc: 'Ратуша: здесь платят взнос за новое звание, заседает совет города.' },
   stall: { name: 'Лавка рынка', pub: true, muni: true, stall: true, rent: 3, slots: 1, r: 2.6, cost: { plank: 8, wood: 6 }, desc: 'Лавка в торговом ряду: у каждой свой класс товаров. Покупатели-горожане платят дороже скупщика.' },
-  mercator: { name: 'Лавка скупщика', pub: true, muni: true, r: 6, cost: { plank: 20, brick: 15 }, desc: 'Скупщик берёт всё и сразу, но по сниженной цене. Открыт с 12:00 до 20:00.' },
+  mercator: { name: 'Лавка скупщика', pub: true, muni: true, r: 6, cost: { plank: 20, brick: 15 }, desc: 'Скупщик берёт всё и сразу, но по сниженной цене. Открыт с 00:20 до 23:40. Продаёт в том числе доски.' },
   servile: { name: 'Невольничий рынок', pub: true, muni: true, r: 9, cost: { plank: 30, wood: 20 }, desc: 'Помост работорговцев у гавани: покупка и продажа рабов.' },
   theatrum: { name: 'Амфитеатр (театр)', pub: true, muni: true, r: 24, cost: { stone: 120, marble: 20, plank: 30 }, desc: 'Полукруглый театр: представления, речи сенаторов, сбор граждан.' },
   armamentarium: { name: 'Арсенал', pub: true, muni: true, r: 10, cost: { stone: 50, iron: 20, plank: 20 }, desc: 'Оружейные склады города: снаряжение отрядов.' },
@@ -571,6 +571,7 @@ export const STALL_GOODS = [
   ['wheat', 'bread', 'meat', 'calamus'], ['wine', 'oil', 'amphora', 'grapes'], ['f_sardine', 'f_mackerel', 'f_seabass', 'f_dentex', 'f_octopus', 'f_grouper', 'f_moray', 'f_tuna', 'f_swordfish', 'f_trout', 'f_eel', 'f_pike', 'f_sturgeon'],
   ['linen', 'leather', 'hide', 'bandage'], ['iron', 'iron_ore', 'arrow', 'pilum'], ['amphora', 'clay', 'brick', 'plank'], ['olives', 'grapes', 'wheat'], ['purple', 'silver', 'gem', 'gold', 'murex', 'artifact'],
 ];
+export const MARKET_GOODS = ['wood', 'plank', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
 export const MARKET_GEAR = ['lance', 'knife', 'gladius', 'axe', 'hasta', 'pick', 'rod', 'rod_bronze', 'rod_tuna', 'torch', 'parma', 'pileus', 'galea_bronze', 'subarmalis', 'caligae', 'ocreae'];
 export const STALL_GEAR = { 4: ['lance', 'knife', 'gladius', 'axe', 'hasta', 'parma', 'pileus', 'galea_bronze', 'caligae', 'ocreae'] };
 export const STALL_SELL = 1.3, BUYER_SELL = 0.85;
@@ -578,8 +579,8 @@ export const STALL_SELL = 1.3, BUYER_SELL = 0.85;
 // ремесло в чужом частном предприятии: доплата хозяину за изделие
 export const CRAFT_FEE = { res: 1, gear: 5 };
 export const STALL_PRICE = 350, STALL_OWN = 1.1, STALL_FEE = 0.04, stallLimit = (rank) => 2 + Math.floor(rank / 3); // лавок в каждом городе
-export const BUYER_HOURS = [12, 20]; // скупщик открыт с 12:00 до 20:00
-export const buyerOpen = (gt) => { const h = dayClock(gt); return h >= BUYER_HOURS[0] && h < BUYER_HOURS[1]; };
+export const BUYER_HOURS = [20/60, 23+40/60]; // скупщик открыт с 00:20 до 23:40
+export const buyerOpen = (gt) => { const minute = Math.floor(dayClock(gt)*60+1e-7); return minute >= Math.round(BUYER_HOURS[0]*60) && minute < Math.round(BUYER_HOURS[1]*60); };
 // ---------- Районы городов: участки покупают у Эдила (клетки 4×4 м) ----------
 // price — денарии за клетку, rank — звание, rare — редкие ресурсы за клетку, mul — множитель производства и дохода
 export const CELL = 4;
@@ -610,6 +611,7 @@ export const EVENT_INFO = {
 export const BARB_CAMP_CD = 1200, BARB_CALM = 2400;
 // Поле Марса (Бруттий): бои армиями; армия каждого полководца — временная, на время боя
 export const WAR = {
+  botScale: { hp: .8, damage: .8, armor: .85 },
   time: 300, ferry: 5, win: 40, lose: 10, maxSquads: 4,
   rent: { inf: { price: 60 }, arch: { price: 50 }, cav: { price: 80 }, art: { price: 110 } }, // отряды на один бой у распорядителя игр
   army: [['inf', 6], ['arch', 4], ['cav', 3]],

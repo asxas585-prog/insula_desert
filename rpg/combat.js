@@ -131,17 +131,26 @@ function separate(list) { // расталкивание по сетке 2 м (н
 const engagement=new Map();
 export function canEngage(m,target){const set=engagement.get(target.id);return !set||set.has(m.id)||set.size<2;}
 function reserveEngagement(m,target){if(!canEngage(m,target))return false;let set=engagement.get(target.id);if(!set)engagement.set(target.id,set=new Set());set.add(m.id);return true;}
-function engagementTick(){
+function engagementTick(t){
  engagement.clear();const ordered=[...G.mobs.values()].filter(m=>m.hp>0&&m.target?.kind==='mob').sort((a,b)=>(b.state==='wind')-(a.state==='wind')||dist(a,tgtEnt(a.target)||a)-dist(b,tgtEnt(b.target)||b)||a.id-b.id);
- for(const m of ordered){const target=tgtEnt(m.target);if(!target||target.hp<=0||!reserveEngagement(m,target)){m.target=null;m.retarget=0;if(m.state==='wind')m.state='chase';}}
+ for(const m of ordered){const target=tgtEnt(m.target);if(!target||target.hp<=0||!reserveEngagement(m,target)){m.target=null;m.retarget=Math.max(m.retarget||0,t+.1+(m.id%5)*.02);if(m.state==='wind')m.state='chase';}}
 }
 // цель: игрок / союзный легионер / вражеский моб
+const targetCells=new Map(),TARGET_CELL=32;
+function indexTargets(){targetCells.clear();for(const m of G.mobs.values()){if(m.hp<=0)continue;const key=Math.floor(m.x/TARGET_CELL)+','+Math.floor(m.z/TARGET_CELL);let cell=targetCells.get(key);if(!cell)targetCells.set(key,cell=[]);cell.push(m);}}
+function* nearbyTargets(m,r){
+ for(let x=Math.floor((m.x-r)/TARGET_CELL);x<=Math.floor((m.x+r)/TARGET_CELL);x++)for(let z=Math.floor((m.z-r)/TARGET_CELL);z<=Math.floor((m.z+r)/TARGET_CELL);z++){
+  const cell=targetCells.get(x+','+z);if(cell)yield* cell;
+ }
+}
+let mobFrame=0;const squadSlots=new WeakMap();
+function cachedSquadSlot(m){if(!m.squad)return null;const old=squadSlots.get(m);if(old?.frame===mobFrame)return old.value;const value=squadSlotFn(m);squadSlots.set(m,{frame:mobFrame,value});return value;}
 function findTarget(m) {
   let best = null, bd = m.def.aggro || 0;
   if (!bd) return null;
   if (m.team) { // Поле Марса: враги — только чужая сторона того же боя
     bd = Math.max(bd, 45);
-    for (const q of G.mobs.values()) if (q.hp > 0 && q.team && q.war === m.war && q.team !== m.team) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+    for (const q of nearbyTargets(m,bd)) if (q.hp > 0 && q.team && q.war === m.war && q.team !== m.team) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
     for (const p of G.players.values()) if (p.alive && p.war && p.war.lid === m.war && p.war.team !== m.team) { const d = dist(m, p); if (d < bd) { bd = d; best = { kind: 'p', id: p.id }; } }
     return best;
   }
@@ -161,7 +170,7 @@ function findTarget(m) {
       for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && !q.inst && !q.war && Math.hypot(q.x - W0.x, q.z - W0.z) < W0.R + 25 && (!W0.forum || Math.hypot(q.x - W0.fx, q.z - W0.fz) < W0.fr + 12)) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
       return best;
     }
-    for (const q of G.mobs.values()) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+    for (const q of nearbyTargets(m,bd)) if (q.hp > 0 && isHostile(q) && q.faction !== 'glad' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
     return best;
   }
   for (const p of G.players.values()) {
@@ -172,7 +181,7 @@ function findTarget(m) {
     if (p.ship) d += 8;
     if (d < bd) { bd = d; best = { kind: 'p', id: p.id }; }
   }
-  if (!m.arena) for (const q of G.mobs.values()) if (q.hp > 0 && q.faction === 'rome' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
+  if (!m.arena) for (const q of nearbyTargets(m,bd)) if (q.hp > 0 && q.faction === 'rome' && q.inst === m.inst) { if(!canEngage(m,q))continue; const d = dist(m, q); if (d < bd) { bd = d; best = { kind: 'mob', id: q.id }; } }
   return best;
 }
 const tgtEnt = (t) => !t ? null : t.kind === 'p' ? G.players.get(t.id) : G.mobs.get(t.id);
@@ -196,7 +205,7 @@ function mobAttackResolve(m) {
 }
 
 export function updateMobs(dt) {
-  const t = now(); navBudget(); NAV.navTick(t);engagementTick();
+  const t = now();mobFrame++;indexTargets(); navBudget(); NAV.navTick(t);engagementTick(t);
   const actives = [];
   for (const m of G.mobs.values()) {
     if (m.hp <= 0) { if (t - m.deadAt > (m.def.tameable && !m.tamedTry ? 45 : 8)) G.mobs.delete(m.id); continue; }
@@ -237,11 +246,11 @@ export function updateMobs(dt) {
       } else wander(m, dt, t);
       continue;
     }
-    if (m.squad) { const sl = squadSlotFn(m); if (sl) { m.home = { x: sl.x, z: sl.z }; m.leash = sl.sq && sl.sq.mode === 'hold' ? 16 : 26; } }
+    if (m.squad) { const sl = cachedSquadSlot(m); if (sl) { m.home = { x: sl.x, z: sl.z }; m.leash = sl.sq && sl.sq.mode === 'hold' ? 16 : 26; } }
     // цель
-    if (!m.target || t > (m.retarget || 0)) { const nt = findTarget(m); if (nt) m.target = nt; else if (m.target && !tgtAlive(tgtEnt(m.target), m.target)) m.target = null; m.retarget = t + 0.8; }
+    if (t >= (m.retarget || 0) || (m.target && !tgtAlive(tgtEnt(m.target),m.target))) { const nt = findTarget(m); if (nt) m.target = nt; else if (m.target && !tgtAlive(tgtEnt(m.target), m.target)) m.target = null; m.retarget = t + .65 + (m.id%7)*.05; }
     if (m.squad && m.squad.sq !== 'guard') { // отряд держит строй: бьёт только тех, кто рядом со своим местом; по приказу — цель отряда
-      const sl = squadSlotFn(m);
+      const sl = cachedSquadSlot(m);
       if (sl) {
         if (sl.focus) { const fo = G.mobs.get(sl.focus); if (fo && fo.hp > 0 && canEngage(m,fo) && dist(m, fo) < (def.ranged ? (def.range || 30) : 9)) m.target = { kind: 'mob', id: fo.id }; }
         const t0 = tgtEnt(m.target); if (t0 && Math.hypot(t0.x - sl.x, t0.z - sl.z) > (def.ranged ? (def.range || 30) + 2 : sl.sq?.mode==='attack'?18:7)) m.target = null;
@@ -316,7 +325,7 @@ function arenaSkill(m, tg, t) {
 function wander(m, dt, t) {
   if (m.board) { m.moving = 0; return; } // абордаж: стоят на палубе
   if (m.squad) { // воин отряда держит место в строю
-    const sl = squadSlotFn(m); if (!sl) { m.moving = 0; return; }
+    const sl = cachedSquadSlot(m); if (!sl) { m.moving = 0; return; }
     const d = Math.hypot(sl.x - m.x, sl.z - m.z);
     if (d > 1.0) { moveMob(m, sl.x, sl.z, m.speed * (d > 10 ? 1.15 : d > 3 ? 0.8 : 0.45), dt); m.moving = d > 10 ? 2 : 1; } else m.moving = 0;
     return;

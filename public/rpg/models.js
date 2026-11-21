@@ -3790,7 +3790,8 @@ export function makeShip(type) {
     P(rock, rbox(2.0, 0.22, 3.4, 0.03), PLANK(), 0, c.deckY + 0.1, cz);
     ({ cg: catapult, arm: catapultArm } = onager(rock, 0, c.deckY + 0.21, cz));
   }
-  g.userData = { oars, sail, seats, hull, rock, type, len: c.L, deckY: c.deckY, catapult, catapultArm, catapultRest: ONAGER_REST, catapultFired: ONAGER_FIRED };
+  const oarBatches=batchOars(rock,oars);
+  g.userData = { oarBatches, oars, sail, seats, hull, rock, type, len: c.L, deckY: c.deckY, catapult, catapultArm, catapultRest: ONAGER_REST, catapultFired: ONAGER_FIRED };
   return g;
 }
 const ONAGER_REST = -1.35, ONAGER_FIRED = 0.17;
@@ -3820,6 +3821,22 @@ function onager(par, x, y, z) {
   cg.userData.arm = arm;
   return { cg, arm };
 }
+// Oars share geometry/materials. Keep their original pivots for animation but submit
+// one instanced draw per geometry instead of one draw for each shaft and blade.
+const oarMatrix=new THREE.Matrix4(),oarPivot=new THREE.Matrix4();
+function batchOars(rock,oars){
+ const groups=new Map();
+ for(const oar of oars){const tilt=oar.userData.tilt;for(const part of [...tilt.children]){
+  if(!part.isMesh)continue;part.updateMatrix();const key=part.geometry.uuid+'/'+part.material.uuid;
+  let b=groups.get(key);if(!b){b={geometry:part.geometry,material:part.material,items:[]};groups.set(key,b);}
+  b.items.push({oar,tilt,local:part.matrix.clone()});tilt.remove(part);
+ }}
+ const batches=[...groups.values()];for(const b of batches){b.mesh=new THREE.InstancedMesh(b.geometry,b.material,b.items.length);b.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);b.mesh.castShadow=true;b.mesh.receiveShadow=true;b.mesh.frustumCulled=false;b.mesh.name='oarBatch';rock.add(b.mesh);}
+ updateOarBatches(batches);return batches;
+}
+function updateOarBatches(batches){
+ for(const b of batches||[]){for(let i=0;i<b.items.length;i++){const {oar,tilt,local}=b.items[i];oar.updateMatrix();tilt.updateMatrix();oarPivot.multiplyMatrices(oar.matrix,tilt.matrix);oarMatrix.multiplyMatrices(oarPivot,local);b.mesh.setMatrixAt(i,oarMatrix);}b.mesh.instanceMatrix.needsUpdate=true;}
+}
 export function animateShip(sh, t, speed = 0) {
   const u = sh.userData; if (!u.rock) return;
   const rowing = Math.abs(speed) > 0.3;
@@ -3834,6 +3851,7 @@ export function animateShip(sh, t, speed = 0) {
       o.userData.tilt.rotation.z = o.userData.base + s * -lift;
     } else { o.rotation.y = lerp(o.rotation.y, s * 0.15, 0.05); o.userData.tilt.rotation.z = lerp(o.userData.tilt.rotation.z, o.userData.base + s * 0.25, 0.05); }
   }
+  updateOarBatches(u.oarBatches);
   if (u.sail) { u.sail.scale.z = 0.8 + 0.25 * Math.sin(t * 1.3) + 0.15 * Math.sin(t * 3.1) + 0.3 * k; u.sail.rotation.x = 0.02 * Math.sin(t * 2.2); }
   const sc = 1 / Math.sqrt(u.len / 10);
   u.rock.rotation.z = Math.sin(t * 0.8) * 0.035 * sc;

@@ -499,7 +499,7 @@ export function buyPrice(p, k, where = null) {
   return purchasePrice(p.char,k,{market:marketMul(k),favor:G.W.favor,openPort:!!lawsAt(p).open_port,magister:isOffice(p,'magister'),foreign:!!where,portMultiplier:where?(PORTS[where].mult[k]||1.1):1,localSale});
 }
 
-export const MARKET_GOODS = ['wood', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
+export const MARKET_GOODS = D.MARKET_GOODS;
 export const MARKET_GEAR = D.MARKET_GEAR;
 export const CAMP_GOODS = ['bread', 'bandage', 'arrow', 'wood', 'stone', 'plank', 'calamus', 'linen'];
 export const CAMP_GEAR = ['knife', 'gladius', 'axe', 'pick', 'rod', 'rod_bronze', 'torch', 'parma', 'galea_bronze', 'bow'];
@@ -568,7 +568,7 @@ export function shopList(p) {
 export function sell(p, res, n, fromCargo = false) {
   const c = p.char; n = Math.max(1, Math.min(9999, n | 0));
   const s = tradeSpot(p); if (!s || !RES[res]) return;
-  if (s.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 12:00 до 20:00.', kind: 'warn' });
+  if (s.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 00:20 до 23:40.', kind: 'warn' });
   let src = c.bag;
   const ship = fromCargo && p.ship ? G.W.ships.find((x) => x.id === p.ship) : null;
   if (fromCargo) { if (!ship || !cargoAccess(p,ship) || s.kind !== 'port') return; src = ship.cargo; }
@@ -590,7 +590,7 @@ export function sell(p, res, n, fromCargo = false) {
 }
 export function buy(p, k, n = 1) {
   const c = p.char; const L = shopList(p); if (!L) return;
-  if (L.spot.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 12:00 до 20:00.', kind: 'warn' });
+  if (L.spot.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 00:20 до 23:40.', kind: 'warn' });
   n = Math.max(1, Math.min(200, n | 0));
   if (RES[k]) {
     if (!L.goods.includes(k)) return;
@@ -628,7 +628,7 @@ export function sellCatch(p, bid) {
 }
 export function sellGear(p, uid) {
   const c = p.char, s = tradeSpot(p); if (!s) return;
-  if (s.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 12:00 до 20:00.', kind: 'warn' });
+  if (s.kind === 'market' && !D.buyerOpen(G.W.time)) return send(p, { type: 'log', text: '🕛 Скупщик открыт с 00:20 до 23:40.', kind: 'warn' });
   const i = c.items.findIndex((x) => x.uid === uid); if (i < 0) return;
   const it = c.items[i], g = GEAR[it.k]; if (g.bound) return;
   const price = Math.round(g.p * 0.35 * QUALITY[it.q || 0].mul * derivedOf(c).sell);

@@ -38,3 +38,14 @@ export function horseMotion(current, heading, desiredHeading, moving, run, kind,
   const speed = current + Math.sign(target - current) * Math.min(Math.abs(target - current), (target > current ? 3.5 : 6) * dt);
   return { speed: Math.max(0, speed), heading: heading + turn };
 }
+
+// Общая ось поля для обеих сторон: одинаковые номера армий стоят друг напротив друга.
+export function battleDeployment(field, team, index, size, group = null, groups = 1) {
+  const yaw = Math.atan2(field.b.x-field.a.x, field.b.z-field.a.z);
+  const ry = yaw + (team === 'B' ? Math.PI : 0), spawn = team === 'A' ? field.a : field.b;
+  const lane = (index-(size-1)/2)*Math.min(28, field.r*.4);
+  const side = lane + (group == null || groups === 1 ? 0 : (group%2-.5)*16);
+  const forward = group == null ? 0 : 5-Math.floor(group/2)*10;
+  return {x:field.x+(spawn.x-field.x)*.82+Math.cos(yaw)*side+Math.sin(ry)*forward,
+    z:field.z+(spawn.z-field.z)*.82-Math.sin(yaw)*side+Math.cos(ry)*forward, ry};
+}
