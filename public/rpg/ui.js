@@ -13,7 +13,24 @@ import { icon, hasIcon, gearIcon } from './icons.js';
 const { RES, GEAR, QUALITY, BUILDINGS, RECIPES, SHIPS, ENEMIES, OFFICES, LAWS, STORY, INSTANCES, PORTS, RANKS, STATS } = D;
 const $ = (id) => document.getElementById(id);
 let MB_PRE = ''; // плашка поверх окна здания (например, «здание продаётся»)
-const setHTML = (el, h) => { if (MB_PRE && el.id === 'mbody') h = MB_PRE + h; if (el._h !== h) { el._h = h; el.innerHTML = h; } };
+let modalPointerDown=false;
+document.addEventListener('pointerdown',()=>{modalPointerDown=true;},true);
+document.addEventListener('pointerup',()=>{modalPointerDown=false;},true);
+addEventListener('blur',()=>{modalPointerDown=false;});
+const setHTML=(el,h)=>{
+  if(MB_PRE&&el.id==='mbody')h=MB_PRE+h;
+  if(el._h===h)return;
+  const arena=el.id==='mbody'&&cur?.kind==='bld'&&S.blds.find(b=>b.id===cur.id)?.type==='amphitheatrum';
+  const context=arena?`${cur.id}:${cur.tab}`:null,keep=arena&&el._arenaContext===context;
+  if(keep&&modalPointerDown)return; // A timer update must not replace a button between pointer-down and click.
+  const values=keep?[...el.querySelectorAll('input[id],textarea[id],select[id]')].map(n=>({id:n.id,value:n.value,checked:n.checked})):[];
+  const active=keep&&el.contains(document.activeElement)?document.activeElement:null;
+  const focus=active?{id:active.id,start:active.selectionStart,end:active.selectionEnd}:null,scroll=el.scrollTop;
+  el._h=h;el.innerHTML=h;el._arenaContext=context;
+  for(const v of values){const n=document.getElementById(v.id);if(n&&el.contains(n)){n.value=v.value;n.checked=v.checked;}}
+  if(focus?.id){const n=document.getElementById(focus.id);if(n&&el.contains(n)){n.focus({preventScroll:true});if(focus.start!=null&&n.setSelectionRange)try{n.setSelectionRange(focus.start,focus.end);}catch{}}}
+  if(keep)el.scrollTop=scroll;
+};
 const resIco = (k) => hasIcon(k) ? icon(k) : (RES[k] ? RES[k].icon : '');
 const resName = (k) => RES[k] ? `${resIco(k)} ${RES[k].name}` : k;
 const gearName = (it) => it ? `<span class="q${it.q || 0}">${GEAR[it.k] ? GEAR[it.k].name : it.k}${it.q ? ` · ${QUALITY[it.q].name}` : ''}</span>` : '<span class="muted">—</span>';
@@ -223,7 +240,8 @@ $('mbody').addEventListener('click', (e) => {
     case 'colonyLoad': net({ type: 'colonyLoad', bid: Number(d.bid) }); break;
     case 'cand': net({ type: 'cand', office: d.office }); break;
     case 'vote': net({ type: 'vote', office: d.office, cid: d.cid }); break;
-    case 'arenaSit': closeModal(); C.arenaSit(Number(d.bid)); break;
+    case 'arenaSit': C.arenaSit(Number(d.bid));render();break;
+    case 'arenaLeave': C.arenaLeave();closeModal();break;
     case 'warCreate': { const zv = ($('warZone') || {}).value; net({ type: 'warCreate', size: Number(d.size) || 1, mode: d.mode, zone: zv === '' || zv == null ? null : Number(zv) }); break; }
     case 'warRent': net({ type: 'warRent', k: d.k }); break;
     case 'warBot': net({ type: 'warBot', id: Number(d.id), side: d.side, on: d.on === '1' }); break;
@@ -961,7 +979,7 @@ function shopHtml(goods, gear, sellAll = true, where = null, o = {}) {
   return closed + sw + (shopSub === 'buy' ? `<div class="sgrid">${buy}</div>` : `<div class="sgrid">${sell}${sg ? `<div class="sgrp"><h4>⚔ Снаряжение</h4>${sg}</div>` : ''}</div>`);
 }
 const MARKET_GOODS = ['wood', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
-const MARKET_GEAR = ['knife', 'gladius', 'axe', 'hasta', 'pick', 'rod', 'rod_bronze', 'rod_tuna', 'torch', 'parma', 'pileus', 'galea_bronze', 'subarmalis', 'caligae', 'ocreae'];
+const MARKET_GEAR = D.MARKET_GEAR;
 function marketPanel(b) {
   const w = S.world, c = S.char;
   tabs([['trade', '⚖ Торговля'], ['slaves', w.laws.slavery_ban ? '👷 Работники' : '⛓ Невольничий рынок'], ['mine', `👥 Мои работники (${(w.slaves || []).length})`]]);
@@ -1059,6 +1077,7 @@ function tabernaPanel(b) {
 }
 function arenaPanel(b) {
   const w = S.world, c = S.char, A = S.st && S.st.ar;
+  MB_PRE+=`<div class="card"><div class="row" style="border:0"><span class="grow muted">${S.spect?.bid===b.id?'Вы сидите на трибуне. E открывает меню, вкладки и ставки доступны.':'С трибуны можно наблюдать игры и делать ставки.'}</span>${S.spect?.bid===b.id?'<button class="btn sm alt" data-a="arenaLeave">Встать и выйти с трибуны</button>':`<button class="btn sm good" data-a="arenaSit" data-bid="${b.id}">🪑 Сесть на трибуну</button>`}</div></div>`;
   tabs([['games', '🏟 Игры'], ['glad', `🛡 Гладиаторы (${c.ap || 0} оч.)`], ['duel', '⚔ Поединок']]);
   if (cur.tab === 'glad') { setHTML($('mbody'), gladHtml()); return; }
   if (cur.tab === 'games' && A && A.mode === 'games') { // Великие игры: ставки на любого гладиатора
@@ -1071,7 +1090,7 @@ function arenaPanel(b) {
     if (!A) h += `<button class="btn" data-a="arena">Открыть игры</button>${hasOff('lanista') ? ' <button class="btn alt" data-a="arena" data-grand="1">Большие игры (150 из казны, награды ×2)</button>' : ''}`;
     else if (A.st === 'prep' && !A.duel) h += `<div class="card">Сбор бойцов: ${A.t} с. Зрители, ставки: <input id="betN" class="num" value="25"> <button class="btn sm" data-a="bet" data-on="w3">Дойдут до 3-й волны (×2)</button> <button class="btn sm" data-a="bet" data-on="w5">До 5-й (×4)</button> <button class="btn sm" data-a="bet" data-on="w8">До 8-й (×8)</button></div>`;
     else h += `<div class="card">Идёт бой: волна ${A.wave}, бойцов ${A.f.length}.</div>`;
-    h += `<div class="card"><div class="row" style="border:0"><span class="grow muted">Зрители смотрят бой с трибун: на песок во время боя выходят только бойцы, а бойцы уходят с арены лишь после окончания боя. С трибуны можно уйти в любое время (E).</span><button class="btn sm good" data-a="arenaSit" data-bid="${b.id}">🪑 Сесть на трибуну</button></div></div>`;
+    h += '<div class="card muted">Во время боя на песке остаются только бойцы. Зрители могут пользоваться меню и выйти с трибуны в любое время.</div>';
     setHTML($('mbody'), h);
   } else {
     let h = '<div class="muted" style="margin-bottom:8px">Вызовите игрока у Амфитеатра на поединок (до поражения, не насмерть). Зрители ставят на победителя.</div>';

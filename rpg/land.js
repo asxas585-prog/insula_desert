@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import {overlaps} from '../public/rpg/footprints.js';
 import { hasCityOffice, cityOf, localOffices } from './access.js';
 // Земля: разрешения Эдила на клетки в районах городов, разметка своих клеток, латифундии, колонии с промыслами
@@ -154,7 +155,7 @@ export function buyRank(p) {
   if (rankEarned(c) <= cur) return say(p, `Рим ещё не одобрил вас для звания «${next.name}»: нужно ${next.dig} очков одобрения (у вас ${c.dig || 0}).`);
   if (c.den < next.fee) return say(p, `Взнос за звание «${next.name}» — ${next.fee} денариев.`);
   c.den -= next.fee; G.W.treasury += next.fee; c.rankBought = cur + 1;
-  log(`🏛 ${c.name} внёс(ла) взнос в Курии и получает звание «${next.name}»!`, 'good'); chronicle(`${c.name} получил(а) звание «${next.name}»`);
+  announce('title',`🏛 ${c.name} внёс(ла) взнос в Курии и получает звание «${next.name}»!`, 'good'); chronicle(`${c.name} получил(а) звание «${next.name}»`);
   p.dirtyChar = true; G.dirtyWorld = true;
 }
 

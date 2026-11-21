@@ -1,3 +1,7 @@
+import {arenaSeat,arenaLeave} from './seating.js';
+import {announce} from './state.js';
+import {movementAllowance} from './movement.js';
+import {horseMaxSpeed} from '../public/rpg/rules.js';
 import * as TN from './tuna.js';
 import { tradeVisit } from './tutorial.js';
 import { shipLimitOf } from './state.js';
@@ -53,7 +57,7 @@ function join(ws, m) {
   if (!c.gotTorch) { c.items.push({ uid: nid(), k: 'torch', q: 0 }); c.gotTorch = true; }
   if (c.horses) { const pubSt = G.W.buildings.find((b) => b.type === 'stabulum'); for (const h of c.horses) { if (h.sat == null) h.sat = 100; if (!h.stable && c.horseOut !== h.id && pubSt) h.stable = pubSt.id; } }
   if (!c.spec) { c.spec = {}; c.specPts = Math.max(0, c.level - 1); }
-  const p = { id: pidSeq++, ws, char: c, x: 0, z: 0, y: 0, ry: 0, alive: true, hp: 0, st: 0, buffs: {}, inst: null, ship: null, seat: null, block: false, iframe: 0, lastMv: now(), dirtyChar: true, joined: now() };
+  const p = { id: pidSeq++, ws, char: c, x: 0, z: 0, y: 0, ry: 0, alive: true, hp: 0, st: 0, buffs: {}, inst: null, ship: null, seat: null, block: false, iframe: 0, lastMv: now(), dirtyChar: true, knownMilitaryRank:D.milIdx(c.milPts||0),joined: now() };
   let pos = (c.x != null && (WG.terrainHeight(c.x, c.z) > 0.2 || WG.deckHeight(c.x,c.z,G.W.buildings)!=null) && Math.abs(c.x) < CFG.world) ? { x: c.x, z: c.z } : spawnPoint(c);
   p.x = pos.x; p.z = pos.z;
   const d = derivedOf(c); p.hp = c.hp && c.hp > 0 ? Math.min(c.hp, d.maxHp) : d.maxHp; p.st = d.maxSt;
@@ -80,6 +84,8 @@ function handle(p, m) {
   if (!p.alive && !['mv','chat','ping'].includes(m.type)) return;
   switch (m.type) {
     case 'mv': return onMove(p, m);
+    case 'arenaLeave': if(arenaLeave(p))sendRoster();else send(p,{type:'arenaSeatRejected',text:'Вы уже покинули трибуну.'});return;
+    case 'arenaSeat': if(arenaSeat(p,m))sendRoster();else send(p,{type:'arenaSeatRejected',text:'Подойдите к действующей арене, чтобы сесть на трибуну.'});return;
     case 'arenaDismount': {const b=G.W.buildings.find(b=>b.id===m.bid&&b.type==='amphitheatrum'&&b.built);if(b&&dist(p,b)<100){p.mounted=false;p.dirtyChar=true;sendRoster();}return;}
     case 'rangedStart': return CB.rangedStart(p,m);
     case 'rangedCancel': return CB.rangedCancel(p);
@@ -361,18 +367,19 @@ export function horsesTick() {
   }
 }
 export function horseSpeed(p) { const c = p.char; if (!p.mounted || !c.horseOut) return 1; const h = (c.horses || []).find((x) => x.id === c.horseOut); return h ? D.HORSES[h.kind].speed * ((h.sat ?? 100) < 30 ? 0.75 : 1) : 1; }
-function onMove(p, m) {
+export function onMove(p, m, t = now()) {
   if (!p.alive) return;
-  const t = now(), dt = Math.max(0, Math.min(.3, t - p.lastMv)); p.lastMv = t;
+  const dt=Math.max(0,t-(p.lastMv??t));
   p.ry = Number(m.ry) || 0; p.run = !!m.run; p.anim = m.a | 0; p.jh = Math.max(0, Math.min(16, Number(m.jh) || 0)); // до 16 м — зритель на трибуне или лучник на башне
   if (p.ship) return;
   const x = Number(m.x), z = Number(m.z);
   if (!isFinite(x) || !isFinite(z)) return;
-  const d = Math.hypot(x - p.x, z - p.z), limit = (p.mounted ? 12.5 : Math.min(26, CFG.run * derivedOf(p.char).speed * 1.3))*(p.char.tunaCarry?.55:1);
-  p.moveCredit = Math.min(3, (p.moveCredit ?? 3) + limit * dt);
+  const h=p.char.horses?.find(h=>h.id===p.char.horseOut),top=p.mounted?horseMaxSpeed(h?.kind,true,(h?.sat??100)<30)*1.1:Math.min(26,CFG.run*derivedOf(p.char).speed*1.3);
+  const d=Math.hypot(x-p.x,z-p.z),limit=top*(p.char.tunaCarry?.55:1);
+  movementAllowance(p,t,limit);p.lastMv=t;
   const maxD = p.moveCredit + (t - (p.dodgeT || 0) < .6 ? 1.5 : 0);
   const platform = !!m.pj && !p.mounted && !p.inst && G.W.buildings.some(b => b.type === 'amphitheatrum' && b.built && Math.hypot(b.x - p.x,b.z - p.z) < 100 && Math.hypot(b.x-x,b.z-z)<95 && d<105);
-  if (d > maxD && !platform) { send(p, { type: 'teleport', x: p.x, z: p.z }); return; } // pj — сел на трибуну или поднялся на башню (место далеко от входа)
+  if (d > maxD && !platform) { p.moveSpeed=0;p.lanceCharge=0;send(p, { type: 'teleport', x: p.x, z: p.z }); return; } // pj — сел на трибуну или поднялся на башню (место далеко от входа)
   if (p.inst) { const I = G.instances.get(p.inst); if (I && !I.walkable(x, z)) return; }
   else if (Math.abs(x) > CFG.world - 5 || Math.abs(z) > CFG.world - 5) return;
   p.moveSpeed=dt>0?Math.min(limit,d/dt):0;
@@ -633,7 +640,7 @@ function sendWorld(p) {
   });
 }
 function sendChar(p) {
-  const c = p.char;
+  const c = p.char,military=D.milIdx(c.milPts||0);if(p.knownMilitaryRank!=null&&military>p.knownMilitaryRank)announce('title',`⚔ ${c.name} получает военное звание «${D.MIL_RANKS[military].name}»!`);p.knownMilitaryRank=military;
   send(p, { type: 'char', c: { housing: LG.housingCapacity(c), cityResources: LG.availableResources(c, p), tutorial: c.tradeTutorial || 0, officePoints: c.officePoints || {}, doneQuests: c.doneQuests || [], sci: SC.sciPublic(c), rankEarned: D.rankIdx(c.dig || 0), milPts: c.milPts || 0, army: AR.armyOf(c), routes: RT.routesOf(c.id), routeLimit: RT.routeLimit(c), dests: { sea: RT.destinations('sea').map((d) => [d.id, d.name]), land: RT.destinations('land').map((d) => [d.id, d.name]) }, permits: c.permits || {}, lat: c.lat || null, rentGot: c.rentGot || 0, ledger: c.ledger || {}, warRent: c.warRent || [], warPick: c.warPick || [], lore: c.lore || {}, cellLimit: LD.cellLimit(c), id: c.id, name: c.name, color: c.color, level: c.level, xp: c.xp, need: D.xpNeed(c.level), points: c.points, stats: c.stats, dig: c.dig, rank: rankOf(c), den: Math.round(c.den), bag: c.bag, gear: c.gear, items: c.items, quests: c.quests, scraps: c.scraps || 0, trophies: c.trophies.slice(-20), armor: Math.round(gearArmor(c)), slow: gearSlow(c), bagW: Math.round(bagWeight(c) * 10) / 10, bagMax: derivedOf(c).bag, home: c.home, stats2: c.stats2, instCd: c.instCd, office: localOffices(c, p)[0] || null, offices: localOffices(c, p), allOffices: officesOf(c), shipLimit: shipLimitOf(c), slaveLimit: EC.slaveCapacity(c), offs: officeHolds(c).map((h) => ({ ...h, cityName: (G.world.cities.find((C) => C.id === h.city) || {}).name || h.city })), kills: c.kills, ap: c.ap || 0, tamer: c.tamer || 0, lions: c.lions || [], arenaGear: c.arenaGear || {}, carry: c.carry || null, tunaCarry: c.tunaCarry || null, guildCrates: c.guildCrates || {}, quadScraps: c.quadScraps || 0, sunk: c.sunk || [], spec: c.spec || {}, specPts: c.specPts || 0, torch: !!c.torch, horses: (c.horses || []).map((h) => (h.until ? { ...h, left: Math.max(0, Math.round(h.until - now())) } : h)), horseOut: c.horseOut || null, mounted: !!p.mounted, war: p.war || null, tpLeft: Math.max(0, Math.round((c.tpAt || 0) - now())) } });
 }
 function sendRoster() {
@@ -660,6 +667,7 @@ export function startRpg(wss) {
   CB.setShipHit(SO.hitEnemyShip); CB.setKneelFn(GL.tryKneel); SO.setBoutFn(GL.boutTick);
   EC.setShipSunkHook(T.onShipSunk); EC.setBerthFn((type, port) => T.freeBerth(type, port, 200, port.id)); EC.setBerthDeckFn((s) => { const b = T.berthByKey(s.type, s.berth); return b && b.deck; }); CB.setSquadFns(AR.squadSlot, AR.squadKill); SC.setTerrain(WG.terrainHeight); CB.setTreasureFn(SC.giveTreasureMap); T.setTreasureFn(SC.giveTreasureMap); SO.setEnemySunkHook((e, q) => { T.onEnemySunk(e, q); CP.onEnemySunk(e, q); }); CB.setBoardFn(T.boardStrike); T.setTradeHooks({ hitEnemyShip: SO.hitEnemyShip }); EC.setEnemyShipHit(SO.hitEnemyShip); SO.setDmgFn((q, n) => CB.damagePlayer(q, n, null));
   setInterval(() => { try { tick(); } catch (e) { console.error('[RPG] такт:', e); } }, 1000 / CFG.tick);
+  const heartbeat=setInterval(()=>{for(const ws of wss.clients)if(ws.readyState===1)ws.ping(()=>{});},25000);heartbeat.unref();wss.on('close',()=>clearInterval(heartbeat));
   wss.on('connection', (ws, req) => {
     let p = null, budget = 0, budgetAt = now(); const ip = req?.socket?.remoteAddress || 'local';
     ws.on('message', (raw, isBin) => {
@@ -672,6 +680,7 @@ export function startRpg(wss) {
       if (G.players.get(p.id) !== p) return;
       try { handle(p, m); } catch (e) { console.error('[RPG]', m.type, e); }
     });
+    ws.on('error',error=>{console.warn('[RPG] WebSocket:',error.code||error.message);});
     ws.on('close', () => { if (p) { log(`${p.char.name} покинул(а) колонию.`, 'info'); dropPlayer(p); } });
   });
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { saveAll(); });

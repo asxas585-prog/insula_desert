@@ -175,6 +175,7 @@ export function log(text, kind = 'info', to = null) {
   if (to) send(to, { type: 'log', text, kind });
   else broadcast({ type: 'log', text, kind });
 }
+export function announce(kind,text,tone='good'){log(text,tone);broadcast({type:'announcement',kind,text});}
 export function chronicle(text) {
   G.W.chronicle.unshift({ t: Date.now(), day: G.W.day, text });
   if (G.W.chronicle.length > 60) G.W.chronicle.length = 60;

@@ -28,10 +28,10 @@ export function formationWorld(i, n, form, columns, x, z, ry) {
   const p = formationSlot(i, n, form, columns);
   return { x: x + p.x * Math.cos(ry) + p.z * Math.sin(ry), z: z - p.x * Math.sin(ry) + p.z * Math.cos(ry) };
 }
+export function horseMaxSpeed(kind,run=true,hungry=false){const quality=HORSES[kind]?.speed||1.6;return(run?10+(quality-1.6)*3:5.5)*(hungry?.75:1);}
 export function horseMotion(current, heading, desiredHeading, moving, run, kind, dt, hungry = false) {
   dt = clamp(dt, 0, .15);
-  const quality = HORSES[kind]?.speed || 1.6;
-  const max = (run ? 10 + (quality - 1.6) * 3 : 5.5) * (hungry ? .75 : 1);
+  const max=horseMaxSpeed(kind,run,hungry);
   let delta = Math.atan2(Math.sin(desiredHeading - heading), Math.cos(desiredHeading - heading));
   const turnRate = 2.3 / (1 + current * .22), turn = clamp(Math.abs(delta), 0, turnRate * dt) * Math.sign(delta);
   const target = moving ? max * (Math.abs(delta) > 1.1 ? .35 : 1) : 0;

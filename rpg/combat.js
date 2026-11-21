@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import {prepareProjectileObstacles,projectileBlocked} from './projectiles.js';
 import { RANGED, rangedProfile } from '../public/rpg/ranged.js';
 import { hasCityOffice, cityOf } from './access.js';
@@ -34,7 +35,7 @@ export function grantDig(p, n, why, bonuses = true) {
   c.dig = (c.dig || 0) + Math.round(n * (temple ? 1.2 : 1));
   const after = rankOf(c), e1 = D.rankIdx(c.dig || 0);
   if (e1 > e0 && c.rankBought != null && e1 > c.rankBought) send(p, { type: 'log', text: `🦅 Рим одобряет вас для звания «${D.RANKS[c.rankBought + 1].name}». Внесите ${D.RANKS[c.rankBought + 1].fee} ден. в Курии, чтобы получить его.`, kind: 'good' });
-  if (after > before) { log(`🏛 ${c.name} получает звание «${D.RANKS[after].name}»!`, 'good'); chronicle(`${c.name} стал(а) ${D.RANKS[after].name.toLowerCase()}ом колонии`); }
+  if (after > before) { announce('title',`🏛 ${c.name} получает звание «${D.RANKS[after].name}»!`, 'good'); chronicle(`${c.name} стал(а) ${D.RANKS[after].name.toLowerCase()}ом колонии`); }
   p.dirtyChar = true;
 }
 

@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import { overlaps } from '../public/rpg/footprints.js';
 import { baseSalePrice, purchasePrice } from '../public/rpg/pricing.js';
 import { privateStores, availableResources, payResources, autoStoreProduction, housingCapacity, housingTick } from './logistics.js';
@@ -278,7 +279,7 @@ export function completeBuilding(b, p) {
   }
   if (G.W.priority === b.type) G.W.priority = null;
   if (b.type === 'castra') G.W.garrison = Math.max(G.W.garrison, 2);
-  if (b.type === 'colonia') { const isl = D.ISLANDS.find((i) => i.id === b.island); log(`🚩 Основана колония на острове «${isl.name}»! Она будет добывать: ${isl.resName}.`, 'good'); }
+  if(b.type==='colonia'){const isl=D.ISLANDS.find(i=>i.id===b.island),resources=(D.COLONY_RES[b.island]||[]).map(([k])=>D.RES[k]?.name||k).join(', ');announce('colony',`🚩 ${p?.char?.name||b.ownerName||'Рим'} основал(а) колонию на острове «${isl?.name||b.island}»!${resources?' Промыслы: '+resources+'.':''}`);}
   storyCheck();
   G.dirtyWorld = true;
 }
@@ -489,7 +490,7 @@ export function buyPrice(p, k, where = null) {
 }
 
 export const MARKET_GOODS = ['wood', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
-export const MARKET_GEAR = ['knife', 'gladius', 'axe', 'hasta', 'pick', 'rod', 'rod_bronze', 'rod_tuna', 'torch', 'parma', 'pileus', 'galea_bronze', 'subarmalis', 'caligae', 'ocreae'];
+export const MARKET_GEAR = D.MARKET_GEAR;
 export const CAMP_GOODS = ['bread', 'bandage', 'arrow', 'wood', 'stone', 'plank', 'calamus', 'linen'];
 export const CAMP_GEAR = ['knife', 'gladius', 'axe', 'pick', 'rod', 'rod_bronze', 'torch', 'parma', 'galea_bronze', 'bow'];
 // покупка лавки рынка: любое звание, лавок не больше stallLimit(звание)

@@ -174,6 +174,7 @@ function onMsg(m) {
     case 'roster': S.roster = new Map(m.list.map((q) => [q.id, q])); for (const [id, o] of players) if (!S.roster.has(id)) { scene.remove(o.obj); players.delete(id); } UI.syncPvp(); for (const [id, o] of players) { const q = S.roster.get(id); if (o.lbl && q && o.lbl.userData.pvp !== !!q.pvp) { o.lbl.userData.pvp = !!q.pvp; if (o.lbl.material && o.lbl.material.color) o.lbl.material.color.set(q.pvp ? 0xff7060 : 0xffffff); } } break;
     case 'log': UI.addLog(esc(m.text), m.kind); break;
     case 'loot': UI.lootToast(m.text, m.k, m.q); SND.play('pickup'); break;
+    case 'announcement': UI.toast(m.text,true,10000);break;
     case 'speech': UI.toast(`📣 ${m.office ? D.OFFICES[m.office].icon + ' ' + D.OFFICES[m.office].name + ' ' : ''}${m.name} с ростр: «${m.text}»`, true, 10000); UI.addLog(`<b>📣 ${esc(m.name)} с ростр:</b> ${esc(m.text)}`, 'chat'); break;
     case 'chat': UI.addLog(`<b style="color:${hexCss(m.color)}">${m.office ? D.OFFICES[m.office].icon + ' ' : ''}${esc(m.name)}:</b> ${esc(m.text)}`, 'chat'); break;
     case 'node': S.nodes[m.id] = { a: m.a }; updateNode(m.id); break;
@@ -182,7 +183,10 @@ function onMsg(m) {
     case 'fx': onFx(m); break;
     case 'dead': UI.showDead(m); S.me.alive = false; break;
     case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; UI.hideDead(); break;
-    case 'teleport': S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
+    case 'arenaSeated': S.seatingPending=null;S.spect=m.seat;S.horseVelocity=0;S.char.mounted=false;Object.assign(S.me,{x:m.seat.x,z:m.seat.z,y:m.seat.y,ry:m.seat.ry});UI.onBlds();UI.addLog('🪑 Вы на трибуне. E — меню арены; выход — кнопкой в меню.','info');break;
+    case 'arenaLeft': S.seatingPending=null;S.spect=null;S.horseVelocity=0;Object.assign(S.me,{x:m.x,z:m.z,y:m.y});break;
+    case 'arenaSeatRejected': S.seatingPending=null;UI.addLog(esc(m.text),'warn');break;
+    case 'teleport': S.seatingPending=null;S.horseVelocity=0; S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
     case 'levelup': UI.levelUp(m); SND.play('build'); break;
     case 'boarded': S.ship = m.sid; S.seat = m.seat; UI.addLog(m.seat === 0 ? 'Вы у руля: W/S — ход, A/D — поворот, E — сойти на берег.' : 'Вы на борту. E — сойти.', 'info'); break;
     case 'inst': enterInstance(m); break;
@@ -904,7 +908,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'KeyF' && S.ship && S.world && SHIPS[(S.world.ships.find((x) => x.id === S.ship) || {}).type]?.catapult) { net({ type: 'catapult', aim: aimMsg() }); }
   else if (k === 'KeyF') startRanged('pilum');
   else if (k === 'KeyT') net({ type: 'torch' });
-  else if (k === 'KeyV') net({ type: 'mount' });
+  else if (k === 'KeyV'&&!S.spect&&!S.seatingPending) net({ type: 'mount' });
   else if (k === 'KeyR') net({ type: 'heal' });
   else if (k === 'KeyY') net({ type: 'eat' });
   else if (k === 'KeyK') { const on = SND.toggle(); UI.addLog(on ? 'Звук включён' : 'Звук выключен', 'info'); }
@@ -1062,7 +1066,7 @@ function findFocus() {
   for (const r of S.W.research || []) { if (Math.abs(r.x - me.x) > 6 || Math.abs(r.z - me.z) > 6) continue; const d = Math.hypot(r.x - me.x, r.z - me.z); if (d < 3.5) { const done = S.char.sci && S.char.sci.rec[r.island + '|f:' + r.sp]; consider(d - 1.5, { kind: 'sciSample', id: r.id, text: done ? `🌿 ${D.PLANT_NAMES[r.sp]} — уже описано` : `E — описать растение: ${D.PLANT_NAMES[r.sp]}` }); } }
   for (const [id, o] of mobs) { if (!o.def.critter || o.st === 3) continue; const d = Math.hypot(o.obj.position.x - me.x, o.obj.position.z - me.z); if (d < 3.2) consider(d - 1.5, { kind: 'sciCatch', id, text: `E — поймать сетью: ${o.def.name} (сетей: ${(S.char.sci && S.char.sci.tools.net) || 0})` }); }
   // башни: подняться / спуститься
-  if (S.spect) return { kind: 'arenaLeave', text: 'E — встать и уйти с трибуны' };
+  if(S.spect)return{kind:'bld',id:S.spect.bid,text:'E — меню арены · ставки и игры · выход с трибуны'};
   if (S.tower) return { kind: 'towerDown', text: 'E — спуститься с башни · стреляйте из лука по врагам' };
   for (const t of towers) { if (Math.abs(t.x - me.x) > 8 || Math.abs(t.z - me.z) > 8) continue; const d = Math.hypot(t.x - me.x, t.z - me.z); if (d < t.half + 3) consider(d - 2.5, { kind: 'towerUp', t, text: `E — подняться на ${t.gate ? 'надвратную башню' : 'башню'}` }); }
   // ворота своего города: должностные лица запирают и открывают
@@ -1135,7 +1139,7 @@ function onInteract() {
     case 'rostra': UI.openSpeech(f.id); break;
     case 'gate': net({ type: 'gateToggle', city: f.city }); break;
     case 'war': UI.openWar(); break;
-    case 'arenaLeave': { const sp = S.spect; S.spect = null; S.me.x = sp.ox; S.me.z = sp.oz; S._perchT = performance.now() + 1500; break; }
+    case 'arenaLeave': arenaLeave();break;
     case 'towerUp': { if(S.char.mounted){net({type:'mount'});S.char.mounted=false;} const T = f.t; S.tower = T; S.me.x = T.x; S.me.z = T.z; UI.addLog('🏹 Вы на башне: стреляйте из лука (ЛКМ) по наступающим. E — спуститься.', 'info'); break; }
     case 'towerDown': { const T = S.tower, Cy = S.W.cities.find((c) => c.id === T.city); S.tower = null; const a = Math.atan2(Cy.x - T.x, Cy.z - T.z); S.me.x = T.x + Math.sin(a) * (T.half + 2.2); S.me.z = T.z + Math.cos(a) * (T.half + 2.2); S._perchT = performance.now() + 1500; break; }
     case 'inst': UI.openInstance(f.key); break;
@@ -1159,6 +1163,7 @@ function updateHold(dt) {
 let sendT = 0, moveSpeed = 0;
 function updateMe(dt) {
   const me = S.me, c = S.char;
+  if(S.seatingPending){moveSpeed=0;S.horseVelocity=0;if(performance.now()-S.seatingPending.at>5000)S.seatingPending=null;else return;}
   if (S.ship) {
     // руль
     if (S.seat === 0) { const f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), t = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0); if (!S.helmT || performance.now() - S.helmT > 100) { S.helmT = performance.now(); net({ type: 'helm', f: UI.anyModal() || chatting ? 0 : f, t: UI.anyModal() || chatting ? 0 : t }); } }
@@ -1166,7 +1171,7 @@ function updateMe(dt) {
     me.y = 0.9; moveSpeed = 0; me.swim = false; me.run = false; return;
   }
   if (!me.alive || !c) { moveSpeed = 0; S.spect = null; return; }
-  if (S.spect) { me.x = S.spect.x; me.z = S.spect.z; me.y = S.spect.y; me.ry = S.spect.ry; moveSpeed = 0; me.swim = false; me.run = false; sendT -= 1 / 60; if (sendT <= 0) { sendT = 0.2; net({ type: 'mv', pj: 1, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, y: Math.round(me.y * 10) / 10, ry: Math.round(me.ry * 100) / 100, run: false, a: 0, jh: Math.round((me.y - bodyY(me.x, me.z)) * 10) / 10 }); } return; } // зритель сидит на трибуне
+  if (S.spect) { me.x = S.spect.x; me.z = S.spect.z; me.y = S.spect.y; me.ry = S.spect.ry; moveSpeed = 0; me.swim = false; me.run = false; sendT -= dt; if (sendT <= 0) { sendT = 0.2; net({ type: 'mv', pj: 1, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, y: Math.round(me.y * 10) / 10, ry: Math.round(me.ry * 100) / 100, run: false, a: 0, jh: Math.round((me.y - bodyY(me.x, me.z)) * 10) / 10 }); } return; } // зритель сидит на трибуне
   const t = performance.now() / 1000;
   let f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), r = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
   if (chatting || UI.anyModal()) { f = 0; r = 0; }
@@ -1660,18 +1665,15 @@ function updateCamera(dt, t) {
   R.sky.position.copy(camera.position);
   if (R.water) { R.water.position.x = Math.round(camera.position.x / 50) * 50; R.water.position.z = Math.round(camera.position.z / 50) * 50; }
 }
+export function arenaLeave(){if(!S.spect||S.seatingPending)return;S.seatingPending={bid:S.spect.bid,at:performance.now()};net({type:'arenaLeave'});}
 // зритель садится на свободное место трибуны (ярус 3–10), лицом к арене; уходит через ближайший вход
-export function arenaSit(bid) {
-  const b = S.blds.find((x) => x.id === bid); if (!b || S.ship || S.tower) return;
-  net({type:'arenaDismount',bid}); S.char.mounted=false; // спешиваемся сами
-  const cs = Math.cos(b.ry || 0), sn = Math.sin(b.ry || 0), base = WG.bldBase(b, 46);
-  let th = Math.random() * Math.PI * 2; if (Math.abs(Math.sin(th)) < 0.25) th += 0.6;
-  const k = 3 + Math.floor(Math.random() * 8), s0 = (k + 0.5) / 13, a = 25.9 + (41.6 - 25.9) * s0, bb = 17.9 + (32.6 - 17.9) * s0, y = base + 3.6 + (14.2 - 3.6) * (k + 1) / 13;
-  const lx = 1.35*a * Math.cos(th), lz = 1.35*bb * Math.sin(th), x = b.x + lx * cs + lz * sn, z = b.z - lx * sn + lz * cs;
-  const gx = Math.cos(th) > 0 ? 66.15 : -66.15, ox = b.x + gx * cs, oz = b.z - gx * sn;
-  S.spect = { x, z, y: y + 0.05, ry: Math.atan2(b.x - x, b.z - z), ox, oz };
-  UI.addLog('🪑 Вы на трибуне. E — встать и уйти.', 'info');
+export function arenaSit(bid){
+ const b=S.blds.find(b=>b.id===bid);if(!b||S.ship||S.tower||S.seatingPending)return;
+ S.seatingPending={bid,at:performance.now()};
+ let angle=Math.random()*Math.PI*2;if(Math.abs(Math.sin(angle))<.25)angle+=.6;
+ net({type:'arenaSeat',bid,angle,tier:3+Math.floor(Math.random()*8)});
 }
+
 export { players, mobs, ships, eships, blds, chestObjs, poiObjs, aimYaw };
 export const getCam = () => ({ yaw: camYaw, pitch: camPitch });
 window.__imp.cam = (y, p, d) => { camYaw = y; camPitch = p; camDist = d; };

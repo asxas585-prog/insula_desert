@@ -571,7 +571,8 @@ export const STALL_GOODS = [
   ['wheat', 'bread', 'meat', 'calamus'], ['wine', 'oil', 'amphora', 'grapes'], ['f_sardine', 'f_mackerel', 'f_seabass', 'f_dentex', 'f_octopus', 'f_grouper', 'f_moray', 'f_tuna', 'f_swordfish', 'f_trout', 'f_eel', 'f_pike', 'f_sturgeon'],
   ['linen', 'leather', 'hide', 'bandage'], ['iron', 'iron_ore', 'arrow', 'pilum'], ['amphora', 'clay', 'brick', 'plank'], ['olives', 'grapes', 'wheat'], ['purple', 'silver', 'gem', 'gold', 'murex', 'artifact'],
 ];
-export const STALL_GEAR = { 4: ['knife', 'gladius', 'axe', 'hasta', 'parma', 'pileus', 'galea_bronze', 'caligae', 'ocreae'] };
+export const MARKET_GEAR = ['lance', 'knife', 'gladius', 'axe', 'hasta', 'pick', 'rod', 'rod_bronze', 'rod_tuna', 'torch', 'parma', 'pileus', 'galea_bronze', 'subarmalis', 'caligae', 'ocreae'];
+export const STALL_GEAR = { 4: ['lance', 'knife', 'gladius', 'axe', 'hasta', 'parma', 'pileus', 'galea_bronze', 'caligae', 'ocreae'] };
 export const STALL_SELL = 1.3, BUYER_SELL = 0.85;
 // своя лавка: купить может игрок любого звания; хозяину — 3 ден./мин, +10% к цене своих товаров и 4% с продаж других в его лавке
 // ремесло в чужом частном предприятии: доплата хозяину за изделие

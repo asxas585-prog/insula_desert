@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import {G,D,WG,now,nid,dist,send,book} from './state.js';
 import {questHook} from './society.js';
 import {grantXp,grantDig} from './combat.js';
@@ -84,7 +85,7 @@ export function tunaTick(dt){
   if(h.tension>=1||t-h.start>65){release(p,'Тунец сорвался. Чередуйте подтягивание и отпускание линя.');continue;}
   if(h.pulling){const a=Math.atan2(s.x-f.x,s.z-f.z),step=Math.max(0,Math.min(dist(f,s)-3,2.7*dt)),next={x:f.x+Math.sin(a)*step,z:f.z+Math.cos(a)*step};if(!tunaPathAllowed(f,next)){release(p,'Тунец не заходит в гавань: ловите в открытой воде.');continue;}f.heading=a;Object.assign(f,next);}
   if(h.progress>=1){const i=hold(s).findIndex(x=>!x);if(i<0){release(p,'Нет свободного бортового места.');continue;}
-   hold(s)[i]={id:f.id,kg:f.kg,caught:Date.now()};fish().delete(f.id);p.harpoon=null;p.char.stats2.fish=(p.char.stats2.fish||0)+1;questHook(p,'fish',{sp:'f_tuna',kg:f.kg});grantXp(p,90);p.dirtyChar=true;G.dirtyWorld=true;say(p,`Тунец ${f.kg} кг закреплён ${i===0?'слева':'справа'}. Возвращайтесь в гавань, сойдите на берег и выгрузите рыбу через G.`);
+   hold(s)[i]={id:f.id,kg:f.kg,caught:Date.now()};fish().delete(f.id);p.harpoon=null;announce('tuna',`🐟 ${p.char.name} выловил(а) тунца весом ${f.kg} кг!`);p.char.stats2.fish=(p.char.stats2.fish||0)+1;questHook(p,'fish',{sp:'f_tuna',kg:f.kg});grantXp(p,90);p.dirtyChar=true;G.dirtyWorld=true;say(p,`Тунец ${f.kg} кг закреплён ${i===0?'слева':'справа'}. Возвращайтесь в гавань, сойдите на берег и выгрузите рыбу через G.`);
   }
  }
 }

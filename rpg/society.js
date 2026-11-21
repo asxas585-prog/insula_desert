@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import { encounterLevel } from './balance.js';
 import { hasCityOffice, cityOf } from './access.js';
 // Общество и мир: должности и выборы, законы, события Рима и Карфагена, вражеские корабли,
@@ -680,30 +681,30 @@ let damagePlayerSafe = () => {};
 export function setDmgFn(fn) { damagePlayerSafe = fn; }
 
 // ---------- Арена ----------
-const arenaB = () => builtOf('amphitheatrum')[0];
+const arenaB=(p=null)=>{const list=builtOf('amphitheatrum');return p?list.sort((a,b)=>dist(p,a)-dist(p,b))[0]:list.find(b=>b.id===G.arena?.bid)||list[0];};
 export function arenaStart(p, mode, grand) {
-  const b = arenaB(); if (!b || dist(p, b) > 60) return send(p, { type: 'log', text: 'Игры проходят в Амфитеатре.', kind: 'warn' });
+  const b = arenaB(p); if (!b || dist(p, b) > 95) return send(p, { type: 'log', text: 'Игры проходят в Амфитеатре.', kind: 'warn' });
   if (G.arena) return send(p, { type: 'log', text: 'Игры уже идут.', kind: 'warn' });
   if (grand) { if (!isOffice(p, 'lanista')) return; if (W().treasury < 150) return send(p, { type: 'log', text: 'Нужно 150 денариев в казне.', kind: 'warn' }); W().treasury -= 150; }
   const ry = b.ry || 0;
-  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 24, rz: 16, ry, mode: 'waves', fighters: new Set(), wave: 0, bets: [], state: 'prep', t: now() + 15, grand: !!grand, by: p.char.name };
-  log(`🏟 ${grand ? 'Ланиста объявил Большие игры' : `${p.char.name} открыл(а) гладиаторские бои`} в Амфитеатре! Бойцы — выходите на песок арены (15 с). Зрители — делайте ставки.`, 'warn');
+  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 32.4, rz: 21.6, ry, mode: 'waves', fighters: new Set(), wave: 0, bets: [], state: 'prep', t: now() + 15, grand: !!grand, by: p.char.name };
+  announce('games',`🏟 ${grand ? 'Ланиста объявил Большие игры' : `${p.char.name} открыл(а) гладиаторские бои`} в Амфитеатре! Бойцы — выходите на песок арены (15 с). Зрители — делайте ставки.`, 'warn');
   G.dirtyWorld = true;
 }
 export function onArenaFloor(p) { const a = G.arena; if (!a) return false; const dx = p.x - a.x, dz = p.z - a.z; const c = Math.cos(a.ry), s = Math.sin(a.ry); const lx = dx * c - dz * s, lz = dx * s + dz * c; return (lx / a.rx) ** 2 + (lz / a.rz) ** 2 < 1; }
 export function duelChallenge(p, pid) {
-  const q = G.players.get(pid), b = arenaB(); if (!q || !b || q === p) return;
-  if (dist(p, b) > 60 || dist(q, b) > 60) return send(p, { type: 'log', text: 'Оба бойца должны быть у Амфитеатра.', kind: 'warn' });
-  q.duelFrom = { pid: p.id, until: now() + 30 };
+  const q = G.players.get(pid), b = arenaB(p); if (!q || !b || q === p) return;
+  if (dist(p, b) > 95 || dist(q, b) > 95) return send(p, { type: 'log', text: 'Оба бойца должны быть у Амфитеатра.', kind: 'warn' });
+  q.duelFrom = { pid: p.id,bid:b.id, until: now() + 30 };
   send(q, { type: 'duelAsk', from: p.char.name, pid: p.id });
   send(p, { type: 'log', text: `Вызов на поединок отправлен: ${q.char.name}`, kind: 'info' });
 }
 export function duelAccept(p) {
   const d = p.duelFrom; if (!d || now() > d.until || G.arena) return;
-  const q = G.players.get(d.pid); const b = arenaB(); if (!q || !b) return;
-  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 24, rz: 16, ry: b.ry || 0, duel: true, mode: 'duel', fighters: new Set([p.id, q.id]), bets: [], state: 'prep', t: now() + 10, names: [q.char.name, p.char.name], ids: [q.id, p.id] };
+  const q=G.players.get(d.pid),b=builtOf('amphitheatrum').find(b=>b.id===d.bid);if(!q||!b||dist(p,b)>95||dist(q,b)>95)return;
+  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 32.4, rz: 21.6, ry: b.ry || 0, duel: true, mode: 'duel', fighters: new Set([p.id, q.id]), bets: [], state: 'prep', t: now() + 10, names: [q.char.name, p.char.name], ids: [q.id, p.id] };
   for (const [i, x] of [q, p].entries()) { const s = i ? 1 : -1; x.x = b.x + Math.sin(b.ry || 0) * 12 * s; x.z = b.z + Math.cos(b.ry || 0) * 12 * s; send(x, { type: 'teleport', x: x.x, z: x.z }); x.hp = derivedOf(x.char).maxHp; }
-  log(`⚔ Поединок в Амфитеатре: ${q.char.name} против ${p.char.name}! Ставки — 10 секунд.`, 'warn');
+  announce('games',`⚔ Поединок в Амфитеатре: ${q.char.name} против ${p.char.name}! Ставки — 10 секунд.`, 'warn');
   G.dirtyWorld = true;
 }
 export function bet(p, on, amt) {

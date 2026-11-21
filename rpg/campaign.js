@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 // Поход на города Сицилии: шпионаж, разграбление пригородов, караваны и торговые корабли снабжения,
 // штурм при нулевой обороне; захваченный город переходит Риму в руинах (здания восстанавливают).
 import { G, D, WG, now, dist, rand, randi, pick, nid, send, log, fx, chronicle, addGear } from './state.js';
@@ -180,7 +181,7 @@ export function assault(p, cityId) {
   });
   if (atk.length) log(`🛡 Защитники ${C.name} выводят ${atk.length} отряд(а) навстречу вашим.`, 'bad');
   R.assault = { t0: now(), live, boss: boss && boss.id };
-  log(`⚔ ШТУРМ ${C.name.toUpperCase()}! ${p.char.name} ведёт римлян на стены. Гарнизон: ${n} воинов и ${boss ? boss.def.name : 'военачальник'}.`, 'bad');
+  announce('siege',`⚔ ШТУРМ ${C.name.toUpperCase()}! ${p.char.name} ведёт римлян на стены. Гарнизон: ${n} воинов и ${boss ? boss.def.name : 'военачальник'}.`, 'bad');
   chronicle(`Начался штурм города ${C.name}`);
   G.dirtyWorld = true;
 }
@@ -206,7 +207,7 @@ export function capture(C) {
   for (const b of G.W.buildings) if (b.city === C.id && b.muni) { b.enemy = false; b.built = false; b.prog = {}; b.hp = 0; b.ruined = false; b.contrib = {}; n++; }
   const lv = lvlOf(C.id);
   for (const p of nearPlayers(C.x, C.z, C.R + 300)) { p.char.den += 150 + lv * 40; grantXp(p, 400 + lv * 80); grantDig(p, 30 + lv * 4); p.dirtyChar = true; }
-  log(`🦅 ${C.name} взят! Город переходит под власть Рима. Здания лежат в руинах (${n}) — восстановите их всем миром.`, 'good');
+  announce('capture',`🦅 ${C.name} взят! Город переходит под власть Рима. Здания лежат в руинах (${n}) — восстановите их всем миром.`, 'good');
   chronicle(`Рим взял город ${C.name}`);
   G.dirtyBld = true; G.dirtyWorld = true;
   storyCheck();

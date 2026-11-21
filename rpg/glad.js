@@ -1,3 +1,4 @@
+import {announce} from './state.js';
 import { housingCapacity } from './logistics.js';
 import { cityOf } from './access.js';
 // Пленники и рабы-гладиаторы, очки арены, школа гладиаторов, приручение львов
@@ -154,7 +155,7 @@ function startBout(p, amph, m) {
   if (lion) { const mm = spawnMob('lion_tamed', L.x + 3, L.z + 3, { lvl: lion.lvl || 1, leash: 99 }); mm.arena = A; a.allies.push(mm.id); }
   const grade = s ? slaveGrade(s) : 2, lv = s ? s.glvl || 0 : 2, nFoes = 1 + (grade >= 3 ? 1 : 0) + (lion && s ? 1 : 0);
   for (let i = 0; i < nFoes; i++) { const f = spawnMob(pick(FOES), Rr.x + i * 2.5, Rr.z + i * 2.5, { lvl: 1 + Math.round(grade * 1.5 + lv * 0.6), leash: 99 }); f.arena = A; a.foes.push(f.id); }
-  log(`🏟 ${c.name} выставил(а) на арену: ${[s && s.name, lion && 'льва ' + lion.name].filter(Boolean).join(' и ')}! Делайте ставки.`, 'warn');
+  announce('games',`🏟 ${c.name} выставил(а) на арену: ${[s && s.name, lion && 'льва ' + lion.name].filter(Boolean).join(' и ')}! Делайте ставки.`, 'warn');
   fx({ kind: 'horn', x: A.x, z: A.z });
 }
 export function boutTick(a) { // вызывается из arenaTick; true — бой окончен
@@ -191,7 +192,7 @@ export function gamesTick() {
   const list = cand.map(({ x, pw }) => ({ key: 's' + x.id, name: x.name, owner: (G.chars[x.owner] || {}).name || '?', sid: x.id, hp: pw.hp, dmg: pw.dmg, type: 'glad_slave' }));
   for (let i = 0; list.length < 4 && i < NPC_GLADS.length; i++) list.push({ key: 'n' + i, name: NPC_GLADS[i][1], owner: 'арена', type: NPC_GLADS[i][0], lvl: 6 + W.day });
   G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry: amph.ry || 0, mode: 'games', fighters: new Set(), bets: [], state: 'prep', t: now() + (process.env.FAST === '1' ? 12 : 60), list, ffa: nid(), mobs: [] };
-  log(`🏟 ВЕЛИКИЕ ИГРЫ в Амфитеатре! Бой «все против всех»: ${list.map((g) => g.name).join(', ')}. Ставки — 60 секунд (E у Амфитеатра).`, 'warn');
+  announce('games',`🏟 ВЕЛИКИЕ ИГРЫ в Амфитеатре! Бой «все против всех»: ${list.map((g) => g.name).join(', ')}. Ставки — 60 секунд (E у Амфитеатра).`, 'warn');
   chronicle('Начались Великие игры'); G.dirtyWorld = true;
 }
 function gamesRun(a) {
@@ -201,7 +202,7 @@ function gamesRun(a) {
     a.state = 'fight'; a.t = t + (process.env.FAST === '1' ? 40 : 240);
     a.list.forEach((g, i) => { const ang = i / a.list.length * Math.PI * 2, x = a.x + Math.sin(ang) * 14, z = a.z + Math.cos(ang) * 10;
       const m = spawnMob(g.type, x, z, { lvl: g.lvl || 1, leash: 99 }); if (!m) return; if (g.hp) { m.maxHp = m.hp = g.hp; m.dmg = g.dmg; } m.arena = A; m.ffa = a.ffa; m.title = g.name; m.gkey = g.key; a.mobs.push(m.id); });
-    fx({ kind: 'horn', x: a.x, z: a.z }); log('🏟 Великие игры: бой начался!', 'warn'); return;
+    fx({ kind: 'horn', x: a.x, z: a.z }); announce('games','🏟 Великие игры: бой начался!', 'warn'); return;
   }
   const alive = a.mobs.map((id) => G.mobs.get(id)).filter((m) => m && m.hp > 0);
   if (alive.length > 1 && t < a.t) return;
