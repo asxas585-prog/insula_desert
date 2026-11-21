@@ -1,4 +1,5 @@
 // Insula Deserta: Империя — архипелаг: рельеф и генерация мира (одинаково на сервере и клиенте)
+import {buildRoadbeds} from './roadbed.js';
 import { overlaps, cellOverlaps } from './footprints.js';
 import { ANCIENT_RUINS, ISLANDS, INSTANCES, CFG, CITIES, BUILDINGS, CELL, RESEARCH, DISTRICTS, cellsOf } from './data.js';
 
@@ -182,6 +183,8 @@ export const SEA_ROCKS = [
 export const rockAt = (x, z, pad = 0) => SEA_ROCKS.find((r) => Math.abs(x - r.x) < r.r + pad && Math.abs(z - r.z) < r.r + pad && Math.hypot(x - r.x, z - r.z) < r.r + pad);
 const ISL = ISLANDS.map((i, k) => ({ ...i, k, seedOff: k * 97.3 }));
 export const islandById = (id) => ISL.find((i) => i.id === id);
+let ROADBEDS=null;
+let WRECK_DECKS=[];
 let MESSANA_CLEAR=[];
 let FLATS = []; // {x,z,r,h} — выровненные площадки (лагеря, колонии, входы)
 
@@ -231,7 +234,7 @@ export function terrainHeight(x, z) {
     if (d < fr) { let k = 1 - smoothstep(f.r, fr, d); if (f.fall) k *= smoothstep(-1.6, 0.6, h); h = h * (1 - k) + f.h * k; }
   }
   if(h>CITY_H&&sdfBase(x,z)>10){for(const a of MESSANA_CLEAR){const k=1-smoothstep(a.r,a.r+55,Math.hypot(x-a.x,z-a.z));h=Math.min(h,h*(1-k)+CITY_H*k);}}
-  return h;
+  return ROADBEDS?ROADBEDS.terrain(x,z,h):h;
 }
 // приют новоприбывших и причал стартовой лодки — в Мессане
 const _ms = CITY_LIST[0];
@@ -286,8 +289,19 @@ export function rostraAt(x, z, blds) {
 let STREETS = [];
 // абордаж: палубы двух сцепленных кораблей и мостик между ними — по ним ходят как по земле
 let BOARD_DECKS = []; export function setBoardDecks(l) { BOARD_DECKS = l || []; }
+export function wreckDecks(){return WRECK_DECKS;}
+export function nearWreck(x,z,pad=8){return WRECK_DECKS.some(d=>Math.hypot(x-d.x,z-d.z)<pad);}
+export function wreckDeckAt(x,z){return WRECK_DECKS.find(d=>inRect(x,z,d.x,d.z,d.ry,[-d.hw,d.hw,-d.hl,d.hl,d.y]))||null;}
+function setupWreckDecks(W){
+ WRECK_DECKS=[];
+ for(const p of W.pois){if(!['shipwreck','sea_wreck'].includes(p.type))continue;const sea=p.type==='sea_wreck',c=Math.cos(p.ry),s=Math.sin(p.ry),sl=sea?null:slopeAt(p.x,p.z,p.r*.6),base=sea?0:Math.max(0,terrainHeight(p.x,p.z));
+  const d={id:p.id,x:p.x+(sea?8.8*c+1.3*s:0),z:p.z+(sea?-8.8*s+1.3*c:0),ry:p.ry+(sea?.35:0),hw:1.8,hl:5,y:sea?1.7:base+.7,base,sea};WRECK_DECKS.push(d);p.wreckDeck=d;
+  const chest=W.chests.filter(ch=>sea?ch.sea:!ch.sea&&['wreck','ornate'].includes(ch.kind)).filter(ch=>Math.hypot(ch.x-p.x,ch.z-p.z)<(sea?20:5)).sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0];
+  if(chest){chest.wreck=p.id;chest.x=d.x+Math.sin(d.ry)*2;chest.z=d.z+Math.cos(d.ry)*2;chest.y=d.y;}
+ }
+}
 export function deckHeight(x, z, blds) {
-  let y = null;
+  let y = wreckDeckAt(x,z)?.y??null;
   for (const r of BOARD_DECKS) { const dx = x - r.x, dz = z - r.z, R = r.hw + r.hl; if (Math.abs(dx) > R || Math.abs(dz) > R) continue; const c = Math.cos(r.ry), s = Math.sin(r.ry), lx = dx * c - dz * s, lz = dx * s + dz * c; if (Math.abs(lx) <= r.hw && Math.abs(lz) <= r.hl && (y == null || r.y > y)) y = r.y; }
   for (const st of STREETS) { if (x < st.box[0] || x > st.box[1] || z < st.box[2] || z > st.box[3]) continue; if (segDist(x, z, st.pts[0], st.pts[1]) < st.w / 2) { y = terrainHeight(x, z) + 0.12; break; } }
   if (Math.abs(x - PIER.x) < 25 && Math.abs(z - PIER.z) < 25 && inRect(x, z, PIER.x, PIER.z, PIER.ry, PIER_DECK)) y = PIER_DECK[4];
@@ -585,6 +599,7 @@ function buildRoadGrid() {
   for (const r of ROADS) { mark(r.pts, 2); for (const b of r.bridges) STATIC_BRIDGES.push({ ...b, type: 'pons', built: true, id: 'sb' + STATIC_BRIDGES.length }); }
 }
 export const roadsList = () => ROADS;
+export const roadSurface=(x,z)=>ROADBEDS?.at(x,z)||null;
 export const staticBridges = () => STATIC_BRIDGES;
 function roadOverlap(x,z,r){return ROADS.some(q=>q.pts?.some((p,i)=>{if(!i)return false;const a=q.pts[i-1],dx=p[0]-a[0],dz=p[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t)<(q.w||4)/2+r;}));}
 export const onRoadNet = (x, z) => ROAD_GRID.has(Math.floor(x / 8) + ',' + Math.floor(z / 8));
@@ -676,7 +691,7 @@ export function protectEstates(world,states={},buildings=[]){
 export function generateWorld(seed) {
   const rnd = makeRng(seed);
   const R = (a, b) => a + rnd() * (b - a);
-  FLATS = []; MESSANA_CLEAR=[];
+  FLATS = []; MESSANA_CLEAR=[];ROADBEDS=null;WRECK_DECKS=[];
   const W = { seed, nodes: [], dens: [], camps: [], chests: [], pois: [], colonySites: [], entrances: [], flats: FLATS };
   let nid = 1;
   const pois = W.pois;
@@ -920,6 +935,8 @@ export function generateWorld(seed) {
       W.riverRocks.push({ x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, s: Math.round((0.9 + rnd() * 1.6) * 100) / 100 });
     }
   }
+  ROADBEDS=buildRoadbeds(ROADS,terrainHeight);
+  setupWreckDecks(W);
   return W;
 }
 // уровень острова (для опасности): чем дальше от центра, тем сложнее

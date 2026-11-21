@@ -19,7 +19,7 @@ const nearHouse = (p) => { const h = G.world.war && G.world.war.house; return h 
 export function warMsg(p, m) {
   const c = p.char, Wr = war();
   if (m.type === 'warHome') { // на Бруттии гулять нельзя — обратно в деревню у гавани
-    if (p.war) return; const v = G.world.war.village; p.x = v.x + rand(-4, 4); p.z = v.z + rand(-4, 4); send(p, { type: 'teleport', x: p.x, z: p.z, text: 'По Бруттию не гуляют: здесь только гавань, деревня и Поле Марса.' }); return;
+    if (p.war||WG.nearWreck(p.x,p.z)) return; const v = G.world.war.village; p.x = v.x + rand(-4, 4); p.z = v.z + rand(-4, 4); send(p, { type: 'teleport', x: p.x, z: p.z, text: 'По Бруттию не гуляют: здесь только гавань, деревня и Поле Марса.' }); return;
   }
   if (m.type === 'ferry') { // переправа: гавань Мессаны ↔ гавань Регия
     const pt = G.W.buildings.find((b) => b.type === 'portus' && b.city === 'messana'), w = G.world.war;

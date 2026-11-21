@@ -99,6 +99,7 @@ function handle(p, m) {
     case 'tradeVisit': return tradeVisit(p, m);
     case 'warehouseMove': case 'autoStore': return LG.warehouseMsg(p, m);
     case 'gatherPose': return EC.gatherPose(p,m);
+    case 'wreckBoard': if(!EC.boardWreck(p,m.id))send(p,{type:'wreckBoardRejected'});return;
     case 'gather': return EC.gather(p, m.id | 0);
     case 'open': return EC.openChest(p, String(m.id));
     case 'eat': return eat(p, m.res);
@@ -600,7 +601,7 @@ function sendState() {
     for (const m of G.mobs.values()) {
       if (m.inst !== p.inst || Math.abs(m.x - p.x) > NEAR || Math.abs(m.z - p.z) > NEAR) continue;
       const st = m.kneel ? 6 : m.hp <= 0 ? 3 : m.state === 'wind' ? 2 : m.moving === 2 ? 4 : m.moving ? 1 : m.drinking ? 5 : 0;
-      mobs.push([m.id, m.type, r1(m.x), r1(m.z), Math.round(m.ry * 100) / 100, Math.round(Math.max(0, m.hp) / m.maxHp * 100), st, m.lvl, st === 2 ? r1((t - m.windStart) / (m.windEnd - m.windStart)) : 0, m.squad ? (m.squad.owner === p.char.id ? m.squad.sq : -1) : 0, m.squad && m.squad.owner !== p.char.id && m.squad.sq !== 'guard' ? 'q' + m.squad.sq : m.grp ? m.grp.id : 0, (m.squad || m.grp) && !(m.squad && m.squad.owner === p.char.id) ? m.gname || '' : 0, m.team ? !!(p.war && p.war.lid === m.war && p.war.team !== m.team) : D.HOSTILE.has(m.faction)]);
+      mobs.push([m.id, m.type, Math.round(m.x*100)/100, Math.round(m.z*100)/100, Math.round(m.ry * 100) / 100, Math.round(Math.max(0, m.hp) / m.maxHp * 100), st, m.lvl, st === 2 ? r1((t - m.windStart) / (m.windEnd - m.windStart)) : 0, m.squad ? (m.squad.owner === p.char.id ? m.squad.sq : -1) : 0, m.squad && m.squad.owner !== p.char.id && m.squad.sq !== 'guard' ? 'q' + m.squad.sq : m.grp ? m.grp.id : 0, (m.squad || m.grp) && !(m.squad && m.squad.owner === p.char.id) ? m.gname || '' : 0, m.team ? !!(p.war && p.war.lid === m.war && p.war.team !== m.team) : D.HOSTILE.has(m.faction)]);
     }
     const proj = [];
     for (const pr of G.proj.values()) if (pr.inst === p.inst && t >= pr.born && Math.abs(pr.x - p.x) < 150 && Math.abs(pr.z - p.z) < 150) proj.push([pr.id, pr.kind, r1(pr.x), r1(pr.y), r1(pr.z), r1(pr.vx), r1(pr.vy), r1(pr.vz)]);
@@ -612,7 +613,7 @@ function sendState() {
     const schools = [];
     if (!p.inst) for (const s of G.schools.values()) if (Math.abs(s.x - p.x) < 320 && Math.abs(s.z - p.z) < 320) schools.push([s.id, r1(s.x), r1(s.z), s.kind]);
     const ar = G.arena ? { mode: G.arena.mode, list: G.arena.mode === 'games' ? G.arena.list.map((g) => ({ key: g.key, name: g.name, owner: g.owner })) : undefined, st: G.arena.state, wave: G.arena.wave, f: [...G.arena.fighters], duel: !!G.arena.duel, names: G.arena.names, ids: G.arena.ids, x: G.arena.x, z: G.arena.z, t: Math.max(0, Math.round(G.arena.t - t)) } : null;
-    send(p, { type: 's', tuna: TN.tunaState(p), wa: warStatus, bd: T.boardDecks(), rd: raidDots, cv: RT.convoyState(), t: r1(W_time()), me: [Math.round(p.hp), d.maxHp, Math.round(p.st), d.maxSt, Math.round(c.sat), p.alive ? 1 : 0, p.poison > t ? 1 : 0, (p.buffs.bath || 0) > t ? 1 : 0], p: plist, m: mobs, pr: proj, d: drops, sh: ships, es: eships, f: schools, fc, ec, ar, mu: G.muster ? [r1(G.muster.x), r1(G.muster.z), Math.round(G.muster.until - t)] : null });
+    send(p, { type: 's', stamp:now(), tuna: TN.tunaState(p), wa: warStatus, bd: T.boardDecks(), rd: raidDots, cv: RT.convoyState(), t: r1(W_time()), me: [Math.round(p.hp), d.maxHp, Math.round(p.st), d.maxSt, Math.round(c.sat), p.alive ? 1 : 0, p.poison > t ? 1 : 0, (p.buffs.bath || 0) > t ? 1 : 0], p: plist, m: mobs, pr: proj, d: drops, sh: ships, es: eships, f: schools, fc, ec, ar, mu: G.muster ? [r1(G.muster.x), r1(G.muster.z), Math.round(G.muster.until - t)] : null });
   }
 }
 const W_time = () => G.W.time;

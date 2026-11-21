@@ -60,9 +60,19 @@ export function nodesRespawn() {
 
 // ---------- Сундуки ----------
 const ch_r = (ch) => (WG.rockAt(ch.x, ch.z) || { r: 8 }).r;
+export function boardWreck(p,id){
+ const d=WG.wreckDecks().find(d=>d.id===id);if(!d||!p.alive||p.inst)return;
+ const ship=p.ship&&G.W.ships.find(s=>s.id===p.ship);if(p.ship&&!ship)return;
+ const limit=ship?SHIPS[ship.type].len/2+7:8,origin=ship||p;if(dist(origin,d)>limit)return;
+ if(ship&&Math.abs(ship.speed||0)>1)return send(p,{type:'log',text:'Остановите корабль рядом с обломками.',kind:'warn'});
+ const x=d.x-Math.sin(d.ry)*3,z=d.z-Math.cos(d.ry)*3;
+ if(ship&&p.seat===0){ship.speed=0;p.helmIn=null;}
+ Object.assign(p,{x,z,y:d.y,jh:0,ship:null,seat:null,mounted:false,swim:false,moveSpeed:0,moveCredit:0,moveBudgetAt:now(),lastMv:now(),dirtyChar:true});
+ send(p,{type:'teleport',x,z,y:d.y,left:true,text:'Вы на обломках. Подойдите к сундуку и нажмите E. Вернуться на корабль можно обычной посадкой.'});return true;
+}
 export function openChest(p, id) {
   const ch = G.chestById.get(id), c = p.char, t = now();
-  if (!ch || !p.alive) return;
+  if (!ch || !p.alive || p.inst) return;
   if (ch.sea ? !((p.ship && dist(p, ch) < ch_r(ch) + 14) || dist(p, ch) < 3.5) : dist(p, ch) > 3.5) return; // сундук на скале открывают с борта корабля
   if ((G.W.chests[id] || 0) > t) return send(p, { type: 'log', text: 'Сундук пуст. Загляните позже.', kind: 'info' });
   const def = CHESTS[ch.kind], lvl = WG.islandLevel[ch.island] || 1;

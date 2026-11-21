@@ -95,7 +95,7 @@ function moveMob(m, tx, tz, speed, dt) {
   const step = Math.min(d, speed * dt);
   let ang = Math.atan2(dx, dz);
   const sd = m.side || (m.id % 2 ? 1 : -1);
-  const order = t < (m.detourUntil || 0) ? [sd * 0.5, 0, sd * 1.0, sd * 1.5, sd * 2.0, sd * 2.6, -sd * 0.5, -sd * 1.0, -sd * 1.6] : [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.1, -2.1, 2.7, -2.7];
+  const order = t < (m.detourUntil || 0) ? [0, sd * 0.5, sd * 1.0, sd * 1.5, sd * 2.0, sd * 2.6, -sd * 0.5, -sd * 1.0, -sd * 1.6] : [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.1, -2.1, 2.7, -2.7];
   const plan = () => { // упёрлись — ищем путь в обход по карте препятствий
     if (m.nav || t < (m.navAt || 0) || pathBudget <= 0 || m.arena || m.inst) return;
     pathBudget--; m.navAt = t + 1.5;

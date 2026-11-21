@@ -1,3 +1,4 @@
+import {pushMotion,sampleMotion} from './motion.js';
 import {RANGED,rangedProfile} from './ranged.js';
 import * as TN from './tuna.js';
 import { formationWorld, horseMotion } from './rules.js';
@@ -73,7 +74,7 @@ function pushOut(x, z, k, pad = 0.35) {
 function collide(x, z) {
   for (let pass = 0; pass < 2; pass++) {
     const l = colGrid.get(cellKey(x, z)); if (!l) break;
-    for (const k of l) { const r = pushOut(x, z, k); if (r) { x = r.x; z = r.z; } }
+    for (const k of l) { if(k.owner==='poi'+WG.wreckDeckAt(x,z)?.id)continue;const r = pushOut(x, z, k); if (r) { x = r.x; z = r.z; } }
   }
   return { x, z };
 }
@@ -151,7 +152,7 @@ async function onWelcome(m) {
   setLoad('Леса, скалы и руины…', 0.7); await new Promise((r) => setTimeout(r, 10));
   buildNodes(); buildDecor();
   setLoad('Точки интереса…', 0.85); await new Promise((r) => setTimeout(r, 10));
-  buildPois(); buildChests();
+  buildPois(); buildWreckDecks();buildChests();
   setLoad('Города, дороги и акведуки…', 0.92); await new Promise((r) => setTimeout(r, 10));
   buildCities(); buildResearch();
   UI.buildMapBase(W);
@@ -184,9 +185,10 @@ function onMsg(m) {
     case 'dead': UI.showDead(m); S.me.alive = false; break;
     case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; UI.hideDead(); break;
     case 'arenaSeated': S.seatingPending=null;S.spect=m.seat;S.horseVelocity=0;S.char.mounted=false;Object.assign(S.me,{x:m.seat.x,z:m.seat.z,y:m.seat.y,ry:m.seat.ry});UI.onBlds();UI.addLog('🪑 Вы на трибуне. E — меню арены; выход — кнопкой в меню.','info');break;
+    case 'wreckBoardRejected': S.wreckBoardPending=null;break;
     case 'arenaLeft': S.seatingPending=null;S.spect=null;S.horseVelocity=0;Object.assign(S.me,{x:m.x,z:m.z,y:m.y});break;
     case 'arenaSeatRejected': S.seatingPending=null;UI.addLog(esc(m.text),'warn');break;
-    case 'teleport': S.seatingPending=null;S.horseVelocity=0; S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
+    case 'teleport': S.wreckBoardPending=null;S.seatingPending=null;S.horseVelocity=0; S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
     case 'levelup': UI.levelUp(m); SND.play('build'); break;
     case 'boarded': S.ship = m.sid; S.seat = m.seat; UI.addLog(m.seat === 0 ? 'Вы у руля: W/S — ход, A/D — поворот, E — сойти на берег.' : 'Вы на борту. E — сойти.', 'info'); break;
     case 'inst': enterInstance(m); break;
@@ -222,7 +224,7 @@ function updateCull(dt) {
     m.visible = !S.inst && d < m.userData.cull * k;
   }
   // Бруттий: гулять нельзя — только гавань-деревня Регия и (во время боя) Поле Марса
-  if (W.war && !S.ship && !S.inst && S.me.alive && !(S.char && S.char.war)) { const v = W.war.village, isl = WG.islandAt(S.me.x, S.me.z); if (isl && isl.id === 'italia' && WG.terrainHeight(S.me.x, S.me.z) > 0.2 && Math.hypot(S.me.x - v.x, S.me.z - v.z) > v.r + 6 && performance.now() - (S._warHomeAt || 0) > 3000) { S._warHomeAt = performance.now(); net({ type: 'warHome' }); } }
+  if (W.war && !WG.nearWreck(S.me.x,S.me.z) && !S.ship && !S.inst && S.me.alive && !(S.char && S.char.war)) { const v = W.war.village, isl = WG.islandAt(S.me.x, S.me.z); if (isl && isl.id === 'italia' && WG.terrainHeight(S.me.x, S.me.z) > 0.2 && Math.hypot(S.me.x - v.x, S.me.z - v.z) > v.r + 6 && performance.now() - (S._warHomeAt || 0) > 3000) { S._warHomeAt = performance.now(); net({ type: 'warHome' }); } }
   // постройки и точки интереса вдали не рисуем (большие видно дальше)
   const px = S.me.x, pz = S.me.z, far = (R.GFX.level === 0 ? 0.7 : R.GFX.level === 1 ? 0.85 : 1);
   for (const o of blds.values()) { const b = o.data, r = (BUILDINGS[b.type] || {}).r || 4, lim = (r >= 20 ? 1300 : r >= 9 ? 700 : 420) * far; o.obj.visible = !S.inst && Math.abs(b.x - px) < lim && Math.abs(b.z - pz) < lim && Math.hypot(b.x - px, b.z - pz) < lim; }
@@ -386,13 +388,13 @@ function buildCities() {
       const ok = WG.terrainHeight(x, z) > -0.3 && !WG.cityAt(x, z, 2);
       if (!ok) { prev = null; continue; }
       const base = P.length / 3;
-      for (const sd of [-1, 1]) { const px = x + nx * sd, pz = z + nz * sd; P.push(px, WG.terrainHeight(px, pz) + 0.07, pz); const v = 0.42 + WG.vnoise(px * 0.4, pz * 0.4) * 0.12; Cc.push(v * 1.05, v, v * 0.9); }
+      for (const sd of [-1, 1]) { const px = x + nx * sd, pz = z + nz * sd; P.push(px,(WG.roadSurface(x,z)?.y??WG.terrainHeight(x,z))+.07,pz); const v = 0.42 + WG.vnoise(px * 0.4, pz * 0.4) * 0.12; Cc.push(v * 1.05, v, v * 0.9); }
       if (prev != null) I.push(prev, prev + 1, base, prev + 1, base + 1, base);
       prev = base; run++;
     }
     if (!I.length) continue;
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(Cc, 3)); g.setIndex(I); g.computeVertexNormals(); g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, roadMat); m.receiveShadow = true; scene.add(m); cityObjs.push(m);
+    const m = new THREE.Mesh(g, roadMat);m.name='road_'+rd.id; m.receiveShadow = true; scene.add(m); cityObjs.push(m);
   }
   // факелы вдоль римских дорог (через ~45 м, по очереди с двух сторон)
   if (MD.makeTorchPost) { const tg = new THREE.Group(); let cnt = 0;
@@ -436,7 +438,7 @@ function buildPois() {
     try { o = MD.makePOI(p.type); } catch (e) { console.warn('poi', p.type, e); continue; }
     const seaLvl = ['pier', 'trader', 'sea_rock', 'sea_wreck'].includes(p.type) && !p.warDeco;
     if (p.type !== 'volcano') R.optimizeStatic(o, { ground: !seaLvl });
-    o.position.set(p.x, seaLvl ? 0 : groundBase(p.x, p.z, p.r * 0.6), p.z); o.rotation.y = p.ry || 0;
+    o.position.set(p.x,p.wreckDeck?p.wreckDeck.base:seaLvl?0:groundBase(p.x,p.z,p.r*.6),p.z); o.rotation.y = p.ry || 0;
     if (o.userData.smoke) volcanoSmoke = o.userData.smoke;
     scene.add(o);
     collidersOf(o, p.x, p.z, p.ry || 0, 'poi' + p.id);
@@ -494,6 +496,12 @@ function doJump() {
   if (!S.me.alive || S.ship || S.inst && false || jumpH > 0.01 || UI.fishActive() || !S.char) return;
   if (WG.terrainHeight(S.me.x, S.me.z) < -1.1 && !onDeck(S.me.x, S.me.z) && !S.inst) return; // из воды не прыгнуть
   jumpV = S.char.mounted ? 7.2 : 6.2; jumpH = 0.001;
+}
+function buildWreckDecks(){
+ for(const d of WG.wreckDecks()){const g=new THREE.Group(),mat=MD.M(0x80644a);g.name='wreckDeck_'+d.id;
+  for(let z=-d.hl+.2;z<d.hl;z+=.42){const plank=new THREE.Mesh(new THREE.BoxGeometry(d.hw*2,.12,.38),mat);plank.position.set(0,-.06,z);g.add(plank);}
+  g.position.set(d.x,d.y,d.z);g.rotation.y=d.ry;scene.add(g);R.optimizeStatic(g,{ground:false});
+ }
 }
 function buildChests() {
   for (const c of W.chests) {
@@ -637,6 +645,7 @@ function syncBoardDecks(list) {
   for (const d of list || []) if (d.plank) { const m = new THREE.Mesh(new THREE.BoxGeometry(d.hw * 2, 0.18, d.hl * 2), MD.M(0x8a6a44)); m.position.set(d.x, d.y - 0.1, d.z); m.rotation.y = d.ry; scene.add(m); bdMeshes.push(m); }
 }
 function onState(s) {
+  const arrival=performance.now()/1000,stamp=s.stamp??arrival;S.motionClock=Math.max(S.motionClock??-Infinity,stamp-arrival);
   TN.syncTuna(s.tuna,ships);
   if (s.wa && S.world) S.world.war = s.wa;
   syncBoardDecks(s.bd);
@@ -699,6 +708,7 @@ function onState(s) {
       o = { obj, type, def, x, z, ry, tx: x, tz: z, tr: ry, bar, lbl, deadT: 0, sp: 0 };
       mobs.set(id, o);
     }
+    o.history||=[];pushMotion(o.history,{t:stamp,x,z,ry,moving:st2===1||st2===4});
     if (st2 === 3 && o.st !== 3) { o.deadT = performance.now() / 1000; }
     Object.assign(o, { tx: x, tz: z, tr: ry, hpp, st: st2, wind, sq: sq || 0, gid: gid || 0, gname: gname || '', id, foe: !!foe });
   }
@@ -1044,6 +1054,7 @@ function findFocus() {
   const consider = (d, f) => { if (d < bd) { bd = d; best = f; } };
   if (!me.alive) return null;
   if (S.ship) {
+    const wdeck=WG.wreckDecks().find(d=>Math.hypot(d.x-me.x,d.z-me.z)<(SHIPS[ships.get(S.ship)?.type]?.len||8)/2+7);if(wdeck)return{kind:'wreckBoard',id:wdeck.id,text:'E — перейти на обломки и осмотреть сундук'};
     const so = ships.get(S.ship), sx = so ? so.obj.position.x : me.x, sz = so ? so.obj.position.z : me.z, L = SHIPS[so ? so.type : 'scapha'].len;
     const moored0 = S.world && (S.world.ships.find((x) => x.id === S.ship) || {}).berth;
     if (!moored0) for (const [id, o] of crateObjs) { const d = Math.hypot(o.x - sx, o.z - sz); if (!o.ground && d < L / 2 + 9) return { kind: 'cratePick', id, text: 'E — поднять плавающий ящик на борт' }; }
@@ -1066,6 +1077,7 @@ function findFocus() {
   for (const r of S.W.research || []) { if (Math.abs(r.x - me.x) > 6 || Math.abs(r.z - me.z) > 6) continue; const d = Math.hypot(r.x - me.x, r.z - me.z); if (d < 3.5) { const done = S.char.sci && S.char.sci.rec[r.island + '|f:' + r.sp]; consider(d - 1.5, { kind: 'sciSample', id: r.id, text: done ? `🌿 ${D.PLANT_NAMES[r.sp]} — уже описано` : `E — описать растение: ${D.PLANT_NAMES[r.sp]}` }); } }
   for (const [id, o] of mobs) { if (!o.def.critter || o.st === 3) continue; const d = Math.hypot(o.obj.position.x - me.x, o.obj.position.z - me.z); if (d < 3.2) consider(d - 1.5, { kind: 'sciCatch', id, text: `E — поймать сетью: ${o.def.name} (сетей: ${(S.char.sci && S.char.sci.tools.net) || 0})` }); }
   // башни: подняться / спуститься
+  if(!WG.wreckDeckAt(me.x,me.z)){const d=WG.wreckDecks().find(d=>Math.hypot(d.x-me.x,d.z-me.z)<8);if(d)consider(1,{kind:'wreckBoard',id:d.id,text:'E — подняться на обломки'});}
   if(S.spect)return{kind:'bld',id:S.spect.bid,text:'E — меню арены · ставки и игры · выход с трибуны'};
   if (S.tower) return { kind: 'towerDown', text: 'E — спуститься с башни · стреляйте из лука по врагам' };
   for (const t of towers) { if (Math.abs(t.x - me.x) > 8 || Math.abs(t.z - me.z) > 8) continue; const d = Math.hypot(t.x - me.x, t.z - me.z); if (d < t.half + 3) consider(d - 2.5, { kind: 'towerUp', t, text: `E — подняться на ${t.gate ? 'надвратную башню' : 'башню'}` }); }
@@ -1119,7 +1131,8 @@ function onInteract() {
   if (S.tunaHelpUntil && performance.now() < S.tunaHelpUntil) { net({ type: 'tunaPull' }); return; }
   const f = focus; if (!f) return;
   switch (f.kind) {
-    case 'chest': net({ type: 'open', id: f.id }); break;
+    case 'wreckBoard': if(S.ship&&S.seat===0)net({type:'helm',f:0,t:0});S.wreckBoardPending=performance.now();net({type:'wreckBoard',id:f.id});break;
+    case 'chest': if(!S.ship)net({type:'mv',x:S.me.x,z:S.me.z,y:S.me.y,ry:S.me.ry,run:!!S.me.run,a:0,jh:jumpH||0});net({ type: 'open', id: f.id }); break;
     case 'cratePick': net({ type: 'cratePick', id: f.id }); break;
     case 'enslave': net({ type: 'enslave', id: f.id }); break;
     case 'tame': net({ type: 'tame', id: f.id }); break;
@@ -1163,6 +1176,7 @@ function updateHold(dt) {
 let sendT = 0, moveSpeed = 0;
 function updateMe(dt) {
   const me = S.me, c = S.char;
+  if(S.wreckBoardPending){moveSpeed=0;if(performance.now()-S.wreckBoardPending>3000)S.wreckBoardPending=null;else return;}
   if(S.seatingPending){moveSpeed=0;S.horseVelocity=0;if(performance.now()-S.seatingPending.at>5000)S.seatingPending=null;else return;}
   if (S.ship) {
     // руль
@@ -1207,8 +1221,8 @@ function updateMe(dt) {
       if (!instWalk(nx, nz)) { if (instWalk(nx, me.z)) nz = me.z; else if (instWalk(me.x, nz)) nx = me.x; else { nx = me.x; nz = me.z; } }
     } else {
       // крутые склоны гор не пускают
-      const h0 = WG.terrainHeight(me.x, me.z), h1 = WG.terrainHeight(nx, nz);
-      if (h1 - h0 > speed * dt * 1.6 && h1 > 2) { nx = me.x; nz = me.z; }
+      const h0=bodyY(me.x,me.z),h1=bodyY(nx,nz),platform=onDeck(me.x,me.z)||onDeck(nx,nz);
+      if(h1-h0>(platform?1.5:speed*dt*1.6)&&h1>2) { nx = me.x; nz = me.z; }
       if (S.tower) { const T = S.tower, c2 = Math.cos(T.a), s2 = Math.sin(T.a); let lx = (nx - T.x) * c2 - (nz - T.z) * s2, lz = (nx - T.x) * s2 + (nz - T.z) * c2; lx = Math.max(-T.half + 0.4, Math.min(T.half - 0.4, lx)); lz = Math.max(-T.half + 0.4, Math.min(T.half - 0.4, lz)); nx = T.x + lx * c2 + lz * s2; nz = T.z - lx * s2 + lz * c2; } // на башне — в пределах площадки
       else { const cc = collide(nx, nz); nx = cc.x; nz = cc.z; }
       // арена во время боя: на песок — только бойцы, бойцы — не уходят до конца боя
@@ -1358,11 +1372,9 @@ function loop() {
   }
   // существа
   for (const o of mobs.values()) {
-    const k = Math.min(1, dt * 9);
-    const px = o.x, pz = o.z;
-    o.x += (o.tx - o.x) * k; o.z += (o.tz - o.z) * k; o.ry = lerpAng(o.ry, o.tr, k);
-    const sp = Math.hypot(o.x - px, o.z - pz) / Math.max(dt, 1e-3); o.sp += (sp - o.sp) * Math.min(1, dt * 8);
-    { const th = WG.terrainHeight(o.x, o.z), dk = th < -0.5 && !S.inst ? WG.deckHeight(o.x, o.z, null) : null; o.obj.position.set(o.x, S.inst ? S.inst.y0 : dk != null ? dk : Math.max(-0.7, th), o.z); } o.obj.rotation.y = o.ry;
+    const pose=sampleMotion(o.history||[],t+(S.motionClock||0));
+    if(pose){o.x=pose.x;o.z=pose.z;o.ry=pose.ry;o.sp+=(pose.speed-o.sp)*Math.min(1,dt*8);}
+    { const th = WG.terrainHeight(o.x, o.z), dk = !S.inst ? WG.deckHeight(o.x, o.z, S.blds) : null; o.obj.position.set(o.x, S.inst ? S.inst.y0 : dk != null ? dk : Math.max(-0.7, th), o.z); } o.obj.rotation.y = o.ry;
     const dead = o.st === 3 ? Math.min(1, (t - o.deadT) / 1) : 0;
     const wind = o.st === 2 ? Math.min(1, o.wind + (t - S.timeAt) * 1.5) : null;
     if (o.def.human) {
