@@ -325,9 +325,12 @@ function buildCities() {
     cg = new THREE.Group(); cg.name = 'city_' + C.id;
     // улицы кардо и декуманус — мощёные плиты
     if (MC.makeStreetSlab) for (const st of C.streets) {
-      const [a, b] = st.pts, L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.ceil(L / 12), ry = Math.atan2(b[0] - a[0], b[1] - a[1]);
+      const [from,to]=st.pts,full=Math.hypot(to[0]-from[0],to[1]-from[1]),dx=(to[0]-from[0])/full,dz=(to[1]-from[1])/full;
+      const a=[from[0]+dx*(st.junctionStart||0),from[1]+dz*(st.junctionStart||0)],b=[to[0]-dx*(st.junctionEnd||0),to[1]-dz*(st.junctionEnd||0)];
+      const L=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.ceil(L/12),ry=Math.atan2(b[0]-a[0],b[1]-a[1]);
       for (let i = 0; i < n; i++) { const t = (i + 0.5) / n, x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t; if (WG.terrainHeight(x, z) < 1.2) continue; add(MC.makeStreetSlab(L / n + 0.1, st.w), x, WG.terrainHeight(x, z) + 0.01, z, ry); }
     }
+    for(const junction of C.junctions||[])if(MC.makeStreetJunction)add(MC.makeStreetJunction(junction),junction.x,WG.terrainHeight(junction.x,junction.z)+.01,junction.z,0);
     // стены с воротами (над морем стен нет)
     if (MC.makeCityWalls) {
       const keep = (a) => { const x = C.x + Math.sin(a) * C.R, z = C.z + Math.cos(a) * C.R; return WG.terrainHeight(x, z) > -0.25 && WG.waterEdgeDist(x, z) > 3 && !WG.onMole(x, z); }; // стена доходит до кромки воды (берегом в обход ворот не пройти); у начала мола стены нет — на мол заходят с берега
@@ -378,7 +381,7 @@ function buildCities() {
         if (WG.terrainHeight(x, z) < 1.2 || C.layout.some((l) => Math.hypot(l.x - x, l.z - z) < ((BUILDINGS[l.type] || {}).r || 4) + 0.5)) continue; add(MD.makeTorchPost(), x, WG.terrainHeight(x, z), z, 0); } }
     scene.add(cg); cg.updateMatrixWorld(true); R.optimizeStatic(cg, { ground: false }); cityObjs.push(cg); cg.userData.cullAt = { x: C.x, z: C.z, d: 1700 }; cg = null;
     // подпись города
-    const fo = C.layout[0]; if (fo) { const lb = MD.makeLabel('🏛 ' + C.name, C.owner === 'rome' ? '#ffe9a8' : '#ff9a7a'); lb.position.set(fo.x, 34, fo.z); lb.scale.multiplyScalar(2.2); scene.add(lb); cityObjs.push(lb); }
+    const fo = C.layout[0]; if (fo) { const lb = MD.makeLabel('🏛 ' + C.name, C.owner === 'rome' ? '#ffe9a8' : '#ff9a7a', {occluded:true}); lb.position.set(fo.x, 34, fo.z); lb.scale.multiplyScalar(2.2); scene.add(lb); cityObjs.push(lb); }
   }
   // римские дороги — лента по рельефу
   const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -416,7 +419,7 @@ function buildCities() {
 // растения для исследования (с подписью)
 function buildResearch() {
   if (!ME.makePlant) return;
-  for (const r of W.research || []) { let o; try { o = ME.makePlant(r.sp); } catch { continue; } R.optimizeStatic(o); o.position.set(r.x, WG.terrainHeight(r.x, r.z), r.z); scene.add(o); const lb = MD.makeLabel('🌿 ' + D.PLANT_NAMES[r.sp], '#b8f0a0'); lb.position.set(0, Math.max(1.6, (o.userData.height || 1) + 0.6), 0); o.add(lb); }
+  for (const r of W.research || []) { let o; try { o = ME.makePlant(r.sp); } catch { continue; } R.optimizeStatic(o); o.position.set(r.x, WG.terrainHeight(r.x, r.z), r.z); scene.add(o); const lb = MD.makeLabel('🌿 ' + D.PLANT_NAMES[r.sp], '#b8f0a0', {occluded:true}); lb.position.set(0, Math.max(1.6, (o.userData.height || 1) + 0.6), 0); o.add(lb); }
 }
 // разграбленные усадьбы — сгоревшие
 function syncSuburbs() {
@@ -445,7 +448,7 @@ function buildPois() {
     if (o.userData.smoke) volcanoSmoke = o.userData.smoke;
     scene.add(o);
     collidersOf(o, p.x, p.z, p.ry || 0, 'poi' + p.id);
-    if (p.name) { const lb = MD.makeLabel(p.name, p.type === 'barb_camp' || p.type === 'punic_fort' ? '#ff9a7a' : '#ffe9a8'); lb.position.set(0, { pyramid: 18, punic_fort: 14, statue: 7 }[p.type] || 6, 0); o.add(lb); }
+    if (p.name) { const lb = MD.makeLabel(p.name, p.type === 'barb_camp' || p.type === 'punic_fort' ? '#ff9a7a' : '#ffe9a8', {occluded:true}); lb.position.set(0, { pyramid: 18, punic_fort: 14, statue: 7 }[p.type] || 6, 0); o.add(lb); }
     p.obj = o; poiObjs.push(p);
   }
   // Поле Марса: точка захвата в центре каждого поля (круг и знамя)
@@ -454,7 +457,7 @@ function buildPois() {
     ring.rotation.x = -Math.PI / 2; ring.position.set(F.x, y + 0.12, F.z); scene.add(ring);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 6, 6), new THREE.MeshStandardMaterial({ color: 0x6b4a2a })); pole.position.set(F.x, y + 3, F.z); scene.add(pole);
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.1), new THREE.MeshStandardMaterial({ color: 0xc9a227, side: THREE.DoubleSide })); flag.position.set(F.x + 0.9, y + 5.3, F.z); scene.add(flag);
-    const lb = MD.makeLabel('🏟 ' + F.name, '#ffe9a8'); lb.position.set(F.x, y + 7, F.z); scene.add(lb);
+    const lb = MD.makeLabel('🏟 ' + F.name, '#ffe9a8', {occluded:true}); lb.position.set(F.x, y + 7, F.z); scene.add(lb);
     warFlags.set(F.id, { ring, flag });
   }
   // портовые города за краем карты
@@ -463,7 +466,7 @@ function buildPois() {
     const a = Math.atan2(port.x, port.z);
     const px = port.x + Math.sin(a) * 140, pz = port.z + Math.cos(a) * 140;
     o.position.set(px, 0, pz); o.rotation.y = a + Math.PI; scene.add(o);
-    const lb = MD.makeLabel('⚓ ' + port.name, '#bfe6ff'); lb.position.set(0, 40, 0); lb.scale.multiplyScalar(4); o.add(lb);
+    const lb = MD.makeLabel('⚓ ' + port.name, '#bfe6ff', {occluded:true}); lb.position.set(0, 40, 0); lb.scale.multiplyScalar(4); o.add(lb);
   }
 }
 export const warFlags = new Map(); // id поля → знамя (цвет — кто держит точку)
@@ -552,7 +555,7 @@ function syncBuilding(b) {
   scene.add(obj);
   if (b.built || b.muni) collidersOf(obj, b.x, b.z, b.ry || 0, 'b' + b.id);
   if (def.stall) { blds.set(b.id, { obj, data: b, key }); return; } // лавки — без подписей
-  const lbl = MD.makeLabel((def.pub ? '' : '⌂ ') + def.name + (b.ownerName ? ` · ${b.ownerName}` : '') + (b.enemy ? ' (под властью врага)' : '') + (b.built ? (b.ruined ? ' (разрушено)' : '') : b.muni ? ` — руины, восстановление ${Math.round(progOf(b) * 100)}%` : ` — стройка ${Math.round(progOf(b) * 100)}%`), b.ruined ? '#ff8a6a' : def.pub ? '#ffe9a8' : '#cfe8b0');
+  const lbl = MD.makeLabel((def.pub ? '' : '⌂ ') + def.name + (b.ownerName ? ` · ${b.ownerName}` : '') + (b.enemy ? ' (под властью врага)' : '') + (b.built ? (b.ruined ? ' (разрушено)' : '') : b.muni ? ` — руины, восстановление ${Math.round(progOf(b) * 100)}%` : ` — стройка ${Math.round(progOf(b) * 100)}%`), b.ruined ? '#ff8a6a' : def.pub ? '#ffe9a8' : '#cfe8b0', {occluded:true});
   lbl.position.set(0, Math.min(16, def.r * 0.9 + 4), 0); obj.add(lbl);
   blds.set(b.id, { obj, data: b, key });
   if (o === undefined && S.started && b.built && Date.now() - (b.done || 0) < 5000) SND.play('build');

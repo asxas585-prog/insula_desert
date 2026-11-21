@@ -47,7 +47,19 @@ test('old additions in Messana relocate onto free city cells and retain all stoc
 
 test('Messana southern gate road ends at the actual arena entrance and guild is near port',()=>{
  const c=world.cities.find(c=>c.id==='messana'),arena=c.layout.find(b=>b.type==='amphitheatrum'),gate=c.gates.reduce((a,b)=>a.z>b.z?a:b),road=c.streets.find(s=>s.arenaApproach);
- assert.deepEqual(road.pts[0],[gate.x,gate.z]);assert.deepEqual(road.pts[1],[arena.entrance.x,arena.entrance.z]);
+ const junction=c.junctions[0],link=c.streets.find(s=>s.arenaGateLink);assert.deepEqual(link.pts,[[gate.x,gate.z],[junction.x,junction.z]]);assert.deepEqual(road.pts[0],[junction.x,junction.z]);assert.deepEqual(road.pts[1],[arena.entrance.x,arena.entrance.z]);
  const dx=gate.x-arena.x,dz=gate.z-arena.z,d=Math.hypot(dx,dz);assert(Math.abs(Math.cos(arena.ry)-dx/d)<1e-9);assert(Math.abs(-Math.sin(arena.ry)-dz/d)<1e-9);
  const guild=c.layout.find(b=>b.type==='collegium'),port=c.layout.find(b=>b.type==='portus');assert(Math.hypot(guild.x-port.x,guild.z-port.z)<75);
+});
+
+test('Messana junction is outside the wall and shares full-width mouths with every road',()=>{
+ const c=world.cities[0],j=c.junctions[0],r=world.roads.find(r=>r.id===j.road);assert(j.arms.length===3);assert(Math.hypot(j.x-c.x,j.z-c.z)>c.R+15);assert(r.pts.some(p=>Math.hypot(p[0]-j.x,p[1]-j.z)<1e-8));
+ const inside=p=>j.polygon.every((a,i)=>{const b=j.polygon[(i+1)%j.polygon.length];return(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0])>=-1e-7;});
+ for(const arm of j.arms){const d=Math.hypot(arm.x-j.x,arm.z-j.z),dx=(arm.x-j.x)/d,dz=(arm.z-j.z)/d,reach=Math.min(10,d/2);for(const side of [-1,0,1])assert(inside([j.x+dx*reach-dz*arm.width*.5*side,j.z+dz*reach+dx*arm.width*.5*side]));}
+ assert(inside([j.x,j.z]));const gateLink=c.streets.find(s=>s.arenaGateLink);assert(Math.abs(gateLink.junctionEnd-Math.min(10,Math.hypot(gateLink.pts[0][0]-j.x,gateLink.pts[0][1]-j.z)/2))<1e-8);
+});
+
+test('the whole paved junction has a walkable surface matching the mesh height',()=>{
+ const j=world.cities[0].junctions[0],height=WG.terrainHeight(j.x,j.z)+.14;
+ for(const p of j.polygon){const x=j.x+(p[0]-j.x)*.9,z=j.z+(p[1]-j.z)*.9;assert(Math.abs(WG.deckHeight(x,z,[])-height)<1e-8);}
 });

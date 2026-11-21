@@ -709,6 +709,21 @@ export function makeStreetSlab(len = 8, wid = 6) {
   return g;
 }
 
+// One paved surface joins all three mouths; curbs stop at each entrance.
+export function makeStreetJunction(junction) {
+ const g=newRoot('street_junction'),{x,z,polygon,arms}=junction,positions=[0,.13,0],uv=[0,0],indices=[];
+ for(const p of polygon){positions.push(p[0]-x,.13,p[1]-z);uv.push((p[0]-x)*.3,(p[1]-z)*.3);}
+ for(let i=0;i<polygon.length;i++)indices.push(0,(i+1)%polygon.length+1,i+1);
+ const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));geometry.setIndex(indices);geometry.computeVertexNormals();
+ const mesh=new THREE.Mesh(geometry,BASALT());mesh.receiveShadow=true;g.add(mesh);
+ for(let i=0;i<polygon.length;i++){
+  const a=polygon[i],b=polygon[(i+1)%polygon.length],mx=(a[0]+b[0])/2-x,mz=(a[1]+b[1])/2-z;
+  const mouth=arms.some(arm=>{const d=Math.hypot(arm.x-x,arm.z-z);return Math.abs((mx*(arm.x-x)+mz*(arm.z-z))/d-Math.min(10,d/2))<.05;});
+  if(!mouth)beam(g,a[0]-x,a[1]-z,b[0]-x,b[1]-z,.13,.18,.2,M(0xb4aa94));
+ }
+ return g;
+}
+
 // ======================================================================
 // 12. Секция каменного мола (вдоль Z); верх на y = 0
 // ======================================================================

@@ -1,5 +1,7 @@
 // Рендер: three.js, постобработка, небо, свет, земля архипелага, вода, склейка статики
 import * as THREE from 'three';
+import {updateVisibleMatrices} from './transforms.js';
+export {updateVisibleMatrices} from './transforms.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -191,7 +193,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); 
         float camD = length(vTW - cameraPosition);
         float big = vn(vTW.xz * 0.035) * 0.6 + vn(vTW.xz * 0.11) * 0.4;
         float fine = vn(vTW.xz * 1.9) * 0.55 + vn(vTW.xz * 5.3) * 0.45;
-        float near = smoothstep(80.0, 6.0, camD) * uDetail;
+        float near = (1.0 - smoothstep(6.0, 80.0, camD)) * uDetail;
         vec3 base = diffuseColor.rgb;
         float green = smoothstep(0.02, 0.12, base.g - base.r * 0.85);
         diffuseColor.rgb *= 0.9 + 0.2 * big;
@@ -201,9 +203,9 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); 
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.78 + 0.45 * blade), green * near * 0.8);
         // слои камня
         float lum = dot(base, vec3(0.299, 0.587, 0.114));
-        float rocky = (1.0 - green) * smoothstep(0.38, 0.3, lum) * step(1.5, vTW.y);
+        float rocky = (1.0 - green) * (1.0 - smoothstep(0.3, 0.38, lum)) * step(1.5, vTW.y);
         diffuseColor.rgb *= mix(1.0, 0.86 + 0.24 * (0.5 + 0.5 * sin(vTW.y * 2.2 + vn(vTW.xz * 0.2) * 3.0)), rocky * uDetail);
-        diffuseColor.rgb *= mix(1.0, 0.8, smoothstep(0.55, 0.05, vTW.y) * step(-0.7, vTW.y));
+        diffuseColor.rgb *= mix(1.0, 0.8, (1.0 - smoothstep(0.05, 0.55, vTW.y)) * step(-0.7, vTW.y));
       }`);
 };
 export const chunks = [];
@@ -315,18 +317,18 @@ const BLOCKS = new Map();
 // уровни: 0 — 1 м (рядом), 1 — 2 м, 2 — 4 м, 3 — 8 м (всегда есть); дальше тумана куски не рисуются
 const LOD_STEP = [1, 2, 4, 8], LOD_NEAR = [110, 250, 560], LOD_KEEP = [260, 420, 900];
 let lodBuilds = 0;
-let lodNext=0,lodX=Infinity,lodZ=Infinity,lodPending=true;
+let lodNext=0,lodX=Infinity,lodZ=Infinity,lodPending=true,lodFar=0;
 export function updateTerrainLod(cx, cz) {
   const now=performance.now();
-  if(now<lodNext || (!lodPending && Math.hypot(cx-lodX,cz-lodZ)<12))return;
-  lodNext=now+100;lodX=cx;lodZ=cz;lodPending=false;
-  lodBuilds = 0;
   const far = scene.fog ? scene.fog.far + 120 : 1700;
+  if(now<lodNext || (!lodPending && Math.hypot(cx-lodX,cz-lodZ)<12 && Math.abs(far-lodFar)<16))return;
+  lodNext=now+100;lodX=cx;lodZ=cz;lodFar=far;lodPending=false;
+  lodBuilds = 0;
   for (const c of chunks) {
     const d = Math.hypot(c.x - cx, c.z - cz);
     let want = d < LOD_NEAR[0] && c.max > -3 ? 0 : d < LOD_NEAR[1] ? 1 : d < LOD_NEAR[2] ? 2 : 3;
     if (c.max < -2 && want < 3) want = Math.max(want, 2); // морское дно — грубо
-    // нужного уровня ещё нет — строим понемногу (не больше 2 кусков за раз), пока показываем более грубый
+    // нужного уровня ещё нет — строим понемногу (не больше одного куска за обновление), пока показываем более грубый
     while (want < 3 && !c.lv[want]) {
       lodPending=true; if (lodBuilds < 1) { lodBuilds++; c.lv[want] = mkChunkMesh(chunkGeo(c.x0, c.z0, LOD_STEP[want])); c.lv[want].visible = false; c.group.add(c.lv[want]); break; }
       want++;
@@ -439,7 +441,7 @@ const _bm = new THREE.Matrix4();
 let groundAO = false;
 function prepGeo(c, toAnchor, withColor, withUv) {
   let g = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
-  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && !(withUv && k === 'uv')) g.deleteAttribute(k);
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && !(c.material.vertexColors && k === 'color') && !(withUv && k === 'uv')) g.deleteAttribute(k);
   if (!g.attributes.normal) g.computeVertexNormals();
   g.morphAttributes = {};
   _bm.copy(toAnchor).multiply(c.matrixWorld);
@@ -516,22 +518,6 @@ export function updateLights(fx, fz, night) {
     if (!c) { l.intensity = 0; continue; }
     l.position.set(c.x, c.y, c.z); l.color.copy(c.v.color); l.intensity = c.v.intensity * (night ? 1.3 : 0.6); l.distance = c.v.distance; l.decay = c.v.decay;
   }
-}
-const frameTransforms=new WeakMap();
-export function updateVisibleMatrices(root,force=false){
-  if(!root.visible)return;
-  if(root.matrixAutoUpdate){
-    const p=root.position,q=root.quaternion,s=root.scale;let old=frameTransforms.get(root);
-    if(!old||old[0]!==p.x||old[1]!==p.y||old[2]!==p.z||old[3]!==q.x||old[4]!==q.y||old[5]!==q.z||old[6]!==q.w||old[7]!==s.x||old[8]!==s.y||old[9]!==s.z){
-      if(!old){old=new Float64Array(10);frameTransforms.set(root,old);}
-      old[0]=p.x;old[1]=p.y;old[2]=p.z;old[3]=q.x;old[4]=q.y;old[5]=q.z;old[6]=q.w;old[7]=s.x;old[8]=s.y;old[9]=s.z;root.updateMatrix();
-    }
-  }
-  if(root.matrixWorldNeedsUpdate||force){
-    if(root.matrixWorldAutoUpdate){if(root.parent)root.matrixWorld.multiplyMatrices(root.parent.matrixWorld,root.matrix);else root.matrixWorld.copy(root.matrix);}
-    root.matrixWorldNeedsUpdate=false;force=true;
-  }
-  for(const child of root.children)updateVisibleMatrices(child,force);
 }
 export const frameStats={calls:0,triangles:0,renderMs:0};
 export function renderFrame() {

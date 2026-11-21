@@ -1,5 +1,6 @@
 // Insula Deserta: Империя — архипелаг: рельеф и генерация мира (одинаково на сервере и клиенте)
 import {buildRoadbeds} from './roadbed.js';
+import {junctionPolygon} from './junctions.js';
 import { overlaps, cellOverlaps } from './footprints.js';
 import { ANCIENT_RUINS, ISLANDS, INSTANCES, CFG, CITIES, BUILDINGS, CELL, RESEARCH, DISTRICTS, cellsOf } from './data.js';
 
@@ -286,7 +287,7 @@ export function rostraAt(x, z, blds) {
   }
   return null;
 }
-let STREETS = [];
+let STREETS = [], JUNCTIONS = [];
 // абордаж: палубы двух сцепленных кораблей и мостик между ними — по ним ходят как по земле
 let BOARD_DECKS = []; export function setBoardDecks(l) { BOARD_DECKS = l || []; }
 export function wreckDecks(){return WRECK_DECKS;}
@@ -304,6 +305,10 @@ export function deckHeight(x, z, blds) {
   let y = wreckDeckAt(x,z)?.y??null;
   for (const r of BOARD_DECKS) { const dx = x - r.x, dz = z - r.z, R = r.hw + r.hl; if (Math.abs(dx) > R || Math.abs(dz) > R) continue; const c = Math.cos(r.ry), s = Math.sin(r.ry), lx = dx * c - dz * s, lz = dx * s + dz * c; if (Math.abs(lx) <= r.hw && Math.abs(lz) <= r.hl && (y == null || r.y > y)) y = r.y; }
   for (const st of STREETS) { if (x < st.box[0] || x > st.box[1] || z < st.box[2] || z > st.box[3]) continue; if (segDist(x, z, st.pts[0], st.pts[1]) < st.w / 2) { y = terrainHeight(x, z) + 0.12; break; } }
+  for(const j of JUNCTIONS){
+    if(Math.abs(x-j.x)>14||Math.abs(z-j.z)>14)continue;
+    if(j.polygon.every((a,i)=>{const b=j.polygon[(i+1)%j.polygon.length];return(b[0]-a[0])*(z-a[1])-(b[1]-a[1])*(x-a[0])>=-1e-7;}))y=Math.max(y??-Infinity,terrainHeight(j.x,j.z)+.14);
+  }
   if (Math.abs(x - PIER.x) < 25 && Math.abs(z - PIER.z) < 25 && inRect(x, z, PIER.x, PIER.z, PIER.ry, PIER_DECK)) y = PIER_DECK[4];
   for (const t of TRADERS) if (Math.abs(x - t.x) < 25 && Math.abs(z - t.z) < 25) for (const R of TRADER_DECKS) if (inRect(x, z, t.x, t.z, t.ry, R)) { if (y == null || R[4] > y) y = R[4]; }
   for (const b of STATIC_BRIDGES) if (Math.abs(x - b.x) < 16 && Math.abs(z - b.z) < 16 && inRect(x, z, b.x, b.z, b.ry, PONS_DECK)) { const dx = x - b.x, dz = z - b.z, lz = dx * Math.sin(b.ry) + dz * Math.cos(b.ry); const yy = bridgeDeckY(b) + ponsLift(lz); if (y == null || yy > y) y = yy; }
@@ -556,7 +561,11 @@ function genCities(W, rnd, addPoi) {
   }
   W.roads = genRoads(W);
   setMuniFootprints(W.cities);
-  STREETS = W.cities.flatMap((C) => C.streets.map((st) => { const [a, b] = st.pts; return { pts: st.pts, w: st.w, box: [Math.min(a[0], b[0]) - st.w, Math.max(a[0], b[0]) + st.w, Math.min(a[1], b[1]) - st.w, Math.max(a[1], b[1]) + st.w] }; }));
+  syncStreetCache(W.cities);
+}
+function syncStreetCache(cities) {
+  JUNCTIONS=cities.flatMap(c=>c.junctions||[]);
+  STREETS = cities.flatMap((C) => C.streets.map((st) => { const [a, b] = st.pts; return { pts: st.pts, w: st.w, box: [Math.min(a[0], b[0]) - st.w, Math.max(a[0], b[0]) + st.w, Math.min(a[1], b[1]) - st.w, Math.max(a[1], b[1]) + st.w] }; }));
 }
 // ---------- Римские дороги между городами (поиск пути по рельефу; мосты через реки) ----------
 const ROAD_LINKS = [['messana', 'tyndaris'], ['tyndaris', 'panormus'], ['panormus', 'hybla'], ['hybla', 'syracusae'], ['syracusae', 'catana'], ['catana', 'messana'], ['catana', 'hybla']];
@@ -630,6 +639,23 @@ export function extendCivicAvenues(C){
  const west=Math.min(-C.R-4,...civic.filter(b=>Math.abs(b.v)<Math.abs(b.u)).map(b=>b.u-b.r-4)),east=Math.max(C.R+4,...civic.filter(b=>Math.abs(b.v)<Math.abs(b.u)).map(b=>b.u+b.r+4));
  const inland=Math.min(-C.R-4,...civic.filter(b=>Math.abs(b.u)<Math.abs(b.v)).map(b=>b.v-b.r-4));
  C.streets[0].pts[0]=cityPt(C,0,inland);C.streets[1].pts=[cityPt(C,west,0),cityPt(C,east,0)];
+}
+
+// Apply after seeded resource generation so adding the junction does not shift resource IDs.
+function connectArenaJunction(W) {
+ const city=W.cities.find(c=>c.id==='messana'),branch=city?.streets.find(s=>s.arenaApproach);
+ if(!branch)return;const gate=city.gates.reduce((a,b)=>a.z>b.z?a:b);
+ const road=W.roads.find(r=>Math.hypot(r.pts[0][0]-gate.x,r.pts[0][1]-gate.z)<1||Math.hypot(r.pts.at(-1)[0]-gate.x,r.pts.at(-1)[1]-gate.z)<1);
+ if(!road)return;
+ const reverse=Math.hypot(road.pts[0][0]-gate.x,road.pts[0][1]-gate.z)>1,pts=reverse?[...road.pts].reverse():[...road.pts];
+ const x=gate.x+Math.sin(gate.a)*18,z=gate.z+Math.cos(gate.a)*18;
+ const next=pts.findIndex(p=>Math.hypot(p[0]-gate.x,p[1]-gate.z)>=34);if(next<0)return;
+ const onward=pts[next];pts.splice(1,next-1,[x,z]);road.pts=reverse?pts.reverse():pts;
+ const entry=branch.pts[1];branch.pts[0]=[x,z];branch.junctionStart=10;
+ city.streets.push({w:8,pts:[[gate.x,gate.z],[x,z]],arenaGateLink:true,junctionEnd:9});
+ const arms=[{x:gate.x,z:gate.z,width:8},{x:onward[0],z:onward[1],width:5.2},{x:entry[0],z:entry[1],width:8}];
+ city.junctions=[{id:'messana-arena',x,z,road:road.id,arms,polygon:junctionPolygon(x,z,arms)}];
+ buildRoadGrid();syncStreetCache(W.cities);
 }
 
 // ---------- Районы и клетки городов (4×4 м, сетка повёрнута по улицам города) ----------
@@ -955,6 +981,7 @@ export function generateWorld(seed) {
       W.riverRocks.push({ x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, s: Math.round((0.9 + rnd() * 1.6) * 100) / 100 });
     }
   }
+  connectArenaJunction(W);
   ROADBEDS=buildRoadbeds(ROADS,terrainHeight);
   setupWreckDecks(W);
   return W;
