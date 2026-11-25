@@ -1,11 +1,5 @@
-import {pushMotion,sampleMotion} from './motion.js';
-import {RANGED,rangedProfile} from './ranged.js';
-import * as TN from './tuna.js';
-import { formationWorld, horseMotion } from './rules.js';
 // Insula Deserta: Империя — клиент
 import * as R from './render.js';
-import { UnitRenderer } from './unit-renderer.js';
-import {crateDeckSlot} from './cargo-layout.js';
 import { THREE, scene, camera, $ } from './render.js';
 import * as MD from './models.js';
 import * as MC from './models_city.js';
@@ -76,7 +70,7 @@ function pushOut(x, z, k, pad = 0.35) {
 function collide(x, z) {
   for (let pass = 0; pass < 2; pass++) {
     const l = colGrid.get(cellKey(x, z)); if (!l) break;
-    for (const k of l) { if(k.owner==='poi'+WG.wreckDeckAt(x,z)?.id)continue;const r = pushOut(x, z, k); if (r) { x = r.x; z = r.z; } }
+    for (const k of l) { const r = pushOut(x, z, k); if (r) { x = r.x; z = r.z; } }
   }
   return { x, z };
 }
@@ -105,13 +99,11 @@ function makeHumanFor(seed, look, color, faction) {
 function lookKey(l) { return JSON.stringify(l); }
 function applyLook(o, l) {
   if (o.userData._crate) { o.remove(o.userData._crate); o.userData._crate = null; }
-  if(o.userData._tuna){o.remove(o.userData._tuna);o.userData._tuna=null;}
-  if(l.tuna){const f=MD.makeFish('tuna');f.rotation.z=Math.PI/2;f.position.set(0,1,.45);f.scale.setScalar(.85);o.add(f);o.userData._tuna=f;}
   if (l.carry) { // ящик в руках: перед грудью, оружие убрано
     let cr; try { cr = MD.makeTradeCrate(l.carry); } catch { cr = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.6), MD.M(0x9a7a4a)); }
     cr.position.set(0, 0.72, 0.42); o.add(cr); o.userData._crate = cr; o.userData._carry = true;
   } else o.userData._carry = false;
-  MD.setGear(o, { weapon: l.carry || l.tuna ? null : l.weapon ? l.weapon[0] : null, q: l.weapon ? l.weapon[1] : 0, offhand: l.offhand ? l.offhand[0] : null, head: l.head ? l.head[0] : null, body: l.body ? l.body[0] : null, legs: l.legs ? l.legs[0] : null, torch: !!l.torch });
+  MD.setGear(o, { weapon: l.carry ? null : l.weapon ? l.weapon[0] : null, q: l.weapon ? l.weapon[1] : 0, offhand: l.offhand ? l.offhand[0] : null, head: l.head ? l.head[0] : null, body: l.body ? l.body[0] : null, legs: l.legs ? l.legs[0] : null, torch: !!l.torch });
 }
 const ATK_DUR = { blade: 0.6, knife: 0.42, axe: 0.95, spear: 0.72, bow: 0.85, throw: 0.9, tool: 0.85, fist: 0.45, rod: 1.0, torch: 0.6, trident: 0.72 };
 const wKind = (k) => (k && GEAR[k] ? GEAR[k].kind : k === 'falx' || k === 'sica' || k === 'falcata' || k === 'khopesh' ? 'blade' : k === 'sling' ? 'throw' : k === 'trident' ? 'trident' : 'fist');
@@ -131,12 +123,12 @@ function setHp(bar, frac) { const fg = bar.userData.fg; fg.scale.x = Math.max(0.
 // ---------- Вход ----------
 const loadEl = $('loading');
 function setLoad(t, p) { loadEl.classList.remove('hidden'); $('loadText').textContent = t; if (p != null) $('loadBar').style.width = Math.round(p * 100) + '%'; }
-UI.initStart(async (name, code, color, password) => {
+UI.initStart(async (name, code, color) => {
   setLoad('Соединение с сервером…', 0.02);
   try { await connect(onMsg, () => UI.addLog('Соединение с сервером потеряно. Обновите страницу.', 'bad')); }
   catch { setLoad('Не удалось соединиться с сервером.'); return; }
-  let token = ''; try { token = localStorage.getItem('imperiumToken') || ''; if (!token) { token = Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join(''); localStorage.setItem('imperiumToken', token); } } catch { token = Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join(''); }
-  net({ type: 'join', name, code: code || undefined, password, token, color });
+  let token = ''; try { token = localStorage.getItem('imperiumToken') || ''; if (!token) { token = Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 8); localStorage.setItem('imperiumToken', token); } } catch { token = 'g' + Math.random().toString(36).slice(2, 14); }
+  net({ type: 'join', name, code: code || undefined, token, color });
 });
 
 async function onWelcome(m) {
@@ -144,8 +136,9 @@ async function onWelcome(m) {
   S.me.x = m.x; S.me.z = m.z; S.clockOff = m.t - Date.now() / 1000;
   setLoad('Создаём архипелаг…', 0.05);
   await new Promise((r) => setTimeout(r, 30));
+  WG.setCoastalExclusions(m.coastKeep || []);
   W = WG.generateWorld(S.seed);
-  S.W = W; syncGuildFootprints();
+  S.W = W;
   const n = R.planTerrain();
   setLoad(`Рельеф островов (${n} участков)…`, 0.08);
   await R.buildTerrain((p) => setLoad('Рельеф островов…', 0.08 + p * 0.5));
@@ -154,7 +147,7 @@ async function onWelcome(m) {
   setLoad('Леса, скалы и руины…', 0.7); await new Promise((r) => setTimeout(r, 10));
   buildNodes(); buildDecor();
   setLoad('Точки интереса…', 0.85); await new Promise((r) => setTimeout(r, 10));
-  buildPois(); buildWreckDecks();buildChests();
+  buildPois(); buildChests();
   setLoad('Города, дороги и акведуки…', 0.92); await new Promise((r) => setTimeout(r, 10));
   buildCities(); buildResearch();
   UI.buildMapBase(W);
@@ -168,30 +161,23 @@ async function onWelcome(m) {
 }
 function onMsg(m) {
   switch (m.type) {
-    case 'error': loadEl.classList.add('hidden'); $('start').classList.remove('hidden'); $('startErr').textContent = m.text || 'Ошибка входа'; break;
     case 'welcome': onWelcome(m); break;
     case 's': onState(m); break;
-    case 'char': { const war=S.char?.war?.lid; S.char = m.c; if(war!==S.char?.war?.lid) {clearTacticalSelection(); if(!S.char?.war && RTS.on)toggleRts();} else {const valid=new Set(barSquads().map(q=>q.id));S.selectedSquads=(S.selectedSquads||[]).filter(id=>valid.has(id));S.selSquad=S.selectedSquads[0]||null;} UI.syncTp(m.c.tpLeft); UI.onChar(); break; }
+    case 'char': S.char = m.c; UI.syncTp(m.c.tpLeft); UI.onChar(); break;
     case 'world': S.world = m; for (const e of m.events || []) if (e.left != null) e._end = performance.now() / 1000 + e.left; syncGates(); UI.onWorld(); syncSuburbs(); break;
-    case 'blds': S.blds = m.list; WG.setCityRoadCells(S.blds); syncGuildFootprints(); if (S.started) syncBuildings(); UI.onBlds(); break;
+    case 'blds': S.blds = m.list; if (S.started) syncBuildings(); UI.onBlds(); break;
     case 'roster': S.roster = new Map(m.list.map((q) => [q.id, q])); for (const [id, o] of players) if (!S.roster.has(id)) { scene.remove(o.obj); players.delete(id); } UI.syncPvp(); for (const [id, o] of players) { const q = S.roster.get(id); if (o.lbl && q && o.lbl.userData.pvp !== !!q.pvp) { o.lbl.userData.pvp = !!q.pvp; if (o.lbl.material && o.lbl.material.color) o.lbl.material.color.set(q.pvp ? 0xff7060 : 0xffffff); } } break;
     case 'log': UI.addLog(esc(m.text), m.kind); break;
     case 'loot': UI.lootToast(m.text, m.k, m.q); SND.play('pickup'); break;
-    case 'announcement': UI.toast(m.text,true,10000);break;
     case 'speech': UI.toast(`📣 ${m.office ? D.OFFICES[m.office].icon + ' ' + D.OFFICES[m.office].name + ' ' : ''}${m.name} с ростр: «${m.text}»`, true, 10000); UI.addLog(`<b>📣 ${esc(m.name)} с ростр:</b> ${esc(m.text)}`, 'chat'); break;
     case 'chat': UI.addLog(`<b style="color:${hexCss(m.color)}">${m.office ? D.OFFICES[m.office].icon + ' ' : ''}${esc(m.name)}:</b> ${esc(m.text)}`, 'chat'); break;
     case 'node': S.nodes[m.id] = { a: m.a }; updateNode(m.id); break;
     case 'chest': { S.chests[m.id] = m.until; const co = chestObjs.get(m.id); if (co && m.x != null) { co.c.x = m.x; co.c.z = m.z; co.moveTo = { x: m.x, z: m.z }; } break; }
     case 'dropGone': { const d = drops.get(m.id); if (d) { scene.remove(d.obj); drops.delete(m.id); } break; }
     case 'fx': onFx(m); break;
-    case 'healCooldown': S.healReady=performance.now()/1000+m.seconds;break;
     case 'dead': UI.showDead(m); S.me.alive = false; break;
-    case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; S.deadAt=0; UI.hideDead(); if(m.battleEnded){clearTacticalSelection();if(RTS.on)toggleRts();} break;
-    case 'arenaSeated': S.seatingPending=null;S.spect=m.seat;S.horseVelocity=0;S.char.mounted=false;Object.assign(S.me,{x:m.seat.x,z:m.seat.z,y:m.seat.y,ry:m.seat.ry});UI.onBlds();UI.addLog('🪑 Вы на трибуне. E — меню арены; выход — кнопкой в меню.','info');break;
-    case 'wreckBoardRejected': S.wreckBoardPending=null;break;
-    case 'arenaLeft': S.seatingPending=null;S.spect=null;S.horseVelocity=0;Object.assign(S.me,{x:m.x,z:m.z,y:m.y});break;
-    case 'arenaSeatRejected': S.seatingPending=null;UI.addLog(esc(m.text),'warn');break;
-    case 'teleport': S.wreckBoardPending=null;S.seatingPending=null;S.horseVelocity=0; S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
+    case 'respawn': S.me.x = m.x; S.me.z = m.z; S.me.alive = true; UI.hideDead(); break;
+    case 'teleport': S.me.x = m.x; S.me.z = m.z; S.tower = null; S.spect = null; if (m.left) { S.ship = null; S.seat = null; } if (m.text) UI.addLog(esc(m.text), 'warn'); break;
     case 'levelup': UI.levelUp(m); SND.play('build'); break;
     case 'boarded': S.ship = m.sid; S.seat = m.seat; UI.addLog(m.seat === 0 ? 'Вы у руля: W/S — ход, A/D — поворот, E — сойти на берег.' : 'Вы на борту. E — сойти.', 'info'); break;
     case 'inst': enterInstance(m); break;
@@ -227,7 +213,7 @@ function updateCull(dt) {
     m.visible = !S.inst && d < m.userData.cull * k;
   }
   // Бруттий: гулять нельзя — только гавань-деревня Регия и (во время боя) Поле Марса
-  if (W.war && !WG.nearWreck(S.me.x,S.me.z) && !S.ship && !S.inst && S.me.alive && !(S.char && S.char.war)) { const v = W.war.village, isl = WG.islandAt(S.me.x, S.me.z); if (isl && isl.id === 'italia' && WG.terrainHeight(S.me.x, S.me.z) > 0.2 && Math.hypot(S.me.x - v.x, S.me.z - v.z) > v.r + 6 && performance.now() - (S._warHomeAt || 0) > 3000) { S._warHomeAt = performance.now(); net({ type: 'warHome' }); } }
+  if (W.war && !S.ship && !S.inst && S.me.alive && !(S.char && S.char.war)) { const v = W.war.village, isl = WG.islandAt(S.me.x, S.me.z); if (isl && isl.id === 'italia' && WG.terrainHeight(S.me.x, S.me.z) > 0.2 && Math.hypot(S.me.x - v.x, S.me.z - v.z) > v.r + 6 && performance.now() - (S._warHomeAt || 0) > 3000) { S._warHomeAt = performance.now(); net({ type: 'warHome' }); } }
   // постройки и точки интереса вдали не рисуем (большие видно дальше)
   const px = S.me.x, pz = S.me.z, far = (R.GFX.level === 0 ? 0.7 : R.GFX.level === 1 ? 0.85 : 1);
   for (const o of blds.values()) { const b = o.data, r = (BUILDINGS[b.type] || {}).r || 4, lim = (r >= 20 ? 1300 : r >= 9 ? 700 : 420) * far; o.obj.visible = !S.inst && Math.abs(b.x - px) < lim && Math.abs(b.z - pz) < lim && Math.hypot(b.x - px, b.z - pz) < lim; }
@@ -325,12 +311,9 @@ function buildCities() {
     cg = new THREE.Group(); cg.name = 'city_' + C.id;
     // улицы кардо и декуманус — мощёные плиты
     if (MC.makeStreetSlab) for (const st of C.streets) {
-      const [from,to]=st.pts,full=Math.hypot(to[0]-from[0],to[1]-from[1]),dx=(to[0]-from[0])/full,dz=(to[1]-from[1])/full;
-      const a=[from[0]+dx*(st.junctionStart||0),from[1]+dz*(st.junctionStart||0)],b=[to[0]-dx*(st.junctionEnd||0),to[1]-dz*(st.junctionEnd||0)];
-      const L=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.ceil(L/12),ry=Math.atan2(b[0]-a[0],b[1]-a[1]);
+      const [a, b] = st.pts, L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.ceil(L / 12), ry = Math.atan2(b[0] - a[0], b[1] - a[1]);
       for (let i = 0; i < n; i++) { const t = (i + 0.5) / n, x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t; if (WG.terrainHeight(x, z) < 1.2) continue; add(MC.makeStreetSlab(L / n + 0.1, st.w), x, WG.terrainHeight(x, z) + 0.01, z, ry); }
     }
-    for(const junction of C.junctions||[])if(MC.makeStreetJunction)add(MC.makeStreetJunction(junction),junction.x,WG.terrainHeight(junction.x,junction.z)+.01,junction.z,0);
     // стены с воротами (над морем стен нет)
     if (MC.makeCityWalls) {
       const keep = (a) => { const x = C.x + Math.sin(a) * C.R, z = C.z + Math.cos(a) * C.R; return WG.terrainHeight(x, z) > -0.25 && WG.waterEdgeDist(x, z) > 3 && !WG.onMole(x, z); }; // стена доходит до кромки воды (берегом в обход ворот не пройти); у начала мола стены нет — на мол заходят с берега
@@ -365,7 +348,7 @@ function buildCities() {
     } }
     // мощёная площадь-парк вокруг арены: плиты, кипарисы, скамьи, факелы
     for (const L of C.layout) { if (L.type !== 'amphitheatrum') continue;
-      const cs = Math.cos(L.ry), sn = Math.sin(L.ry), Ao = 60.21, Bo = 48.06, tileM = MD.M(0xc9bda2), tileM2 = MD.M(0xb7aa8c), geo = new THREE.BoxGeometry(4.05, 0.3, 4.05);
+      const cs = Math.cos(L.ry), sn = Math.sin(L.ry), Ao = 44.6, Bo = 35.6, tileM = MD.M(0xc9bda2), tileM2 = MD.M(0xb7aa8c), geo = new THREE.BoxGeometry(4.05, 0.3, 4.05);
       for (let lx = -Ao - 14; lx <= Ao + 14; lx += 4) for (let lz = -Bo - 14; lz <= Bo + 14; lz += 4) {
         const e1 = (lx / (Ao - 1)) ** 2 + (lz / (Bo - 1)) ** 2, e2 = (lx / (Ao + 13)) ** 2 + (lz / (Bo + 13)) ** 2; if (e1 < 1 || e2 > 1) continue;
         const x = L.x + lx * cs + lz * sn, z = L.z - lx * sn + lz * cs, h = WG.terrainHeight(x, z); if (h < 1) continue;
@@ -381,7 +364,7 @@ function buildCities() {
         if (WG.terrainHeight(x, z) < 1.2 || C.layout.some((l) => Math.hypot(l.x - x, l.z - z) < ((BUILDINGS[l.type] || {}).r || 4) + 0.5)) continue; add(MD.makeTorchPost(), x, WG.terrainHeight(x, z), z, 0); } }
     scene.add(cg); cg.updateMatrixWorld(true); R.optimizeStatic(cg, { ground: false }); cityObjs.push(cg); cg.userData.cullAt = { x: C.x, z: C.z, d: 1700 }; cg = null;
     // подпись города
-    const fo = C.layout[0]; if (fo) { const lb = MD.makeLabel('🏛 ' + C.name, C.owner === 'rome' ? '#ffe9a8' : '#ff9a7a', {occluded:true}); lb.position.set(fo.x, 34, fo.z); lb.scale.multiplyScalar(2.2); scene.add(lb); cityObjs.push(lb); }
+    const fo = C.layout[0]; if (fo) { const lb = MD.makeLabel('🏛 ' + C.name, C.owner === 'rome' ? '#ffe9a8' : '#ff9a7a'); lb.position.set(fo.x, 34, fo.z); lb.scale.multiplyScalar(2.2); scene.add(lb); cityObjs.push(lb); }
   }
   // римские дороги — лента по рельефу
   const roadMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
@@ -394,13 +377,13 @@ function buildCities() {
       const ok = WG.terrainHeight(x, z) > -0.3 && !WG.cityAt(x, z, 2);
       if (!ok) { prev = null; continue; }
       const base = P.length / 3;
-      for (const sd of [-1, 1]) { const px = x + nx * sd, pz = z + nz * sd; P.push(px,(WG.roadSurface(x,z)?.y??WG.terrainHeight(x,z))+.07,pz); const v = 0.42 + WG.vnoise(px * 0.4, pz * 0.4) * 0.12; Cc.push(v * 1.05, v, v * 0.9); }
+      for (const sd of [-1, 1]) { const px = x + nx * sd, pz = z + nz * sd; P.push(px, WG.terrainHeight(px, pz) + 0.07, pz); const v = 0.42 + WG.vnoise(px * 0.4, pz * 0.4) * 0.12; Cc.push(v * 1.05, v, v * 0.9); }
       if (prev != null) I.push(prev, prev + 1, base, prev + 1, base + 1, base);
       prev = base; run++;
     }
     if (!I.length) continue;
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(Cc, 3)); g.setIndex(I); g.computeVertexNormals(); g.computeBoundingSphere();
-    const m = new THREE.Mesh(g, roadMat);m.name='road_'+rd.id; m.receiveShadow = true; scene.add(m); cityObjs.push(m);
+    const m = new THREE.Mesh(g, roadMat); m.receiveShadow = true; scene.add(m); cityObjs.push(m);
   }
   // факелы вдоль римских дорог (через ~45 м, по очереди с двух сторон)
   if (MD.makeTorchPost) { const tg = new THREE.Group(); let cnt = 0;
@@ -419,14 +402,10 @@ function buildCities() {
 // растения для исследования (с подписью)
 function buildResearch() {
   if (!ME.makePlant) return;
-  for (const r of W.research || []) { let o; try { o = ME.makePlant(r.sp); } catch { continue; } R.optimizeStatic(o); o.position.set(r.x, WG.terrainHeight(r.x, r.z), r.z); scene.add(o); const lb = MD.makeLabel('🌿 ' + D.PLANT_NAMES[r.sp], '#b8f0a0', {occluded:true}); lb.position.set(0, Math.max(1.6, (o.userData.height || 1) + 0.6), 0); o.add(lb); }
+  for (const r of W.research || []) { let o; try { o = ME.makePlant(r.sp); } catch { continue; } R.optimizeStatic(o); o.position.set(r.x, WG.terrainHeight(r.x, r.z), r.z); scene.add(o); const lb = MD.makeLabel('🌿 ' + D.PLANT_NAMES[r.sp], '#b8f0a0'); lb.position.set(0, Math.max(1.6, (o.userData.height || 1) + 0.6), 0); o.add(lb); }
 }
 // разграбленные усадьбы — сгоревшие
 function syncSuburbs() {
-  if(!W||!S.started)return;
-  const excluded=new Set(S.world?.excludedSuburbs||[]);
-  for(const p of W.pois)if(p.type==='suburb_villa'&&(p.suppressed||excluded.has(p.id))){p.suppressed=true;const index=poiObjs.findIndex(o=>o.id===p.id);if(index>=0){scene.remove(poiObjs[index].obj);poiObjs.splice(index,1);}removeColliders('poi'+p.id);}
-
   const CI = S.world && S.world.cityState; if (!CI || !S.started) return;
   for (const p of poiObjs) {
     if (p.type !== 'suburb_villa' || p.burntShown) continue;
@@ -439,16 +418,15 @@ function syncSuburbs() {
 const poiObjs = [];
 function buildPois() {
   for (const p of W.pois) {
-    if(p.suppressed)continue;
     let o;
     try { o = MD.makePOI(p.type); } catch (e) { console.warn('poi', p.type, e); continue; }
     const seaLvl = ['pier', 'trader', 'sea_rock', 'sea_wreck'].includes(p.type) && !p.warDeco;
     if (p.type !== 'volcano') R.optimizeStatic(o, { ground: !seaLvl });
-    o.position.set(p.x,p.wreckDeck?p.wreckDeck.base:seaLvl?0:groundBase(p.x,p.z,p.r*.6),p.z); o.rotation.y = p.ry || 0;
+    o.position.set(p.x, seaLvl ? 0 : groundBase(p.x, p.z, p.r * 0.6), p.z); o.rotation.y = p.ry || 0;
     if (o.userData.smoke) volcanoSmoke = o.userData.smoke;
     scene.add(o);
     collidersOf(o, p.x, p.z, p.ry || 0, 'poi' + p.id);
-    if (p.name) { const lb = MD.makeLabel(p.name, p.type === 'barb_camp' || p.type === 'punic_fort' ? '#ff9a7a' : '#ffe9a8', {occluded:true}); lb.position.set(0, { pyramid: 18, punic_fort: 14, statue: 7 }[p.type] || 6, 0); o.add(lb); }
+    if (p.name) { const lb = MD.makeLabel(p.name, p.type === 'barb_camp' || p.type === 'punic_fort' ? '#ff9a7a' : '#ffe9a8'); lb.position.set(0, { pyramid: 18, punic_fort: 14, statue: 7 }[p.type] || 6, 0); o.add(lb); }
     p.obj = o; poiObjs.push(p);
   }
   // Поле Марса: точка захвата в центре каждого поля (круг и знамя)
@@ -457,7 +435,7 @@ function buildPois() {
     ring.rotation.x = -Math.PI / 2; ring.position.set(F.x, y + 0.12, F.z); scene.add(ring);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 6, 6), new THREE.MeshStandardMaterial({ color: 0x6b4a2a })); pole.position.set(F.x, y + 3, F.z); scene.add(pole);
     const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.1), new THREE.MeshStandardMaterial({ color: 0xc9a227, side: THREE.DoubleSide })); flag.position.set(F.x + 0.9, y + 5.3, F.z); scene.add(flag);
-    const lb = MD.makeLabel('🏟 ' + F.name, '#ffe9a8', {occluded:true}); lb.position.set(F.x, y + 7, F.z); scene.add(lb);
+    const lb = MD.makeLabel('🏟 ' + F.name, '#ffe9a8'); lb.position.set(F.x, y + 7, F.z); scene.add(lb);
     warFlags.set(F.id, { ring, flag });
   }
   // портовые города за краем карты
@@ -466,7 +444,7 @@ function buildPois() {
     const a = Math.atan2(port.x, port.z);
     const px = port.x + Math.sin(a) * 140, pz = port.z + Math.cos(a) * 140;
     o.position.set(px, 0, pz); o.rotation.y = a + Math.PI; scene.add(o);
-    const lb = MD.makeLabel('⚓ ' + port.name, '#bfe6ff', {occluded:true}); lb.position.set(0, 40, 0); lb.scale.multiplyScalar(4); o.add(lb);
+    const lb = MD.makeLabel('⚓ ' + port.name, '#bfe6ff'); lb.position.set(0, 40, 0); lb.scale.multiplyScalar(4); o.add(lb);
   }
 }
 export const warFlags = new Map(); // id поля → знамя (цвет — кто держит точку)
@@ -475,8 +453,7 @@ function seatWorld(sid, seat) {
   const o = ships.get(sid); if (!o) return null;
   const u = o.obj.userData, seats = u.seats; if (!seats || !seats.length) return null;
   const i = Math.max(0, Math.min(seats.length - 1, seat | 0));
-  // Update only the root and rocking deck; oars, rigging and hull are irrelevant to a seat.
-  (u.rock || o.obj).updateWorldMatrix(true,false);
+  o.obj.updateMatrixWorld(true);
   _seatV.copy(seats[i]).applyMatrix4((u.rock || o.obj).matrixWorld);
   return { x: _seatV.x, y: _seatV.y, z: _seatV.z, ry: o.obj.rotation.y, small: o.type === 'scapha' };
 }
@@ -503,12 +480,6 @@ function doJump() {
   if (!S.me.alive || S.ship || S.inst && false || jumpH > 0.01 || UI.fishActive() || !S.char) return;
   if (WG.terrainHeight(S.me.x, S.me.z) < -1.1 && !onDeck(S.me.x, S.me.z) && !S.inst) return; // из воды не прыгнуть
   jumpV = S.char.mounted ? 7.2 : 6.2; jumpH = 0.001;
-}
-function buildWreckDecks(){
- for(const d of WG.wreckDecks()){const g=new THREE.Group(),mat=MD.M(0x80644a);g.name='wreckDeck_'+d.id;
-  for(let z=-d.hl+.2;z<d.hl;z+=.42){const plank=new THREE.Mesh(new THREE.BoxGeometry(d.hw*2,.12,.38),mat);plank.position.set(0,-.06,z);g.add(plank);}
-  g.position.set(d.x,d.y,d.z);g.rotation.y=d.ry;scene.add(g);R.optimizeStatic(g,{ground:false});
- }
 }
 function buildChests() {
   for (const c of W.chests) {
@@ -555,7 +526,7 @@ function syncBuilding(b) {
   scene.add(obj);
   if (b.built || b.muni) collidersOf(obj, b.x, b.z, b.ry || 0, 'b' + b.id);
   if (def.stall) { blds.set(b.id, { obj, data: b, key }); return; } // лавки — без подписей
-  const lbl = MD.makeLabel((def.pub ? '' : '⌂ ') + def.name + (b.ownerName ? ` · ${b.ownerName}` : '') + (b.enemy ? ' (под властью врага)' : '') + (b.built ? (b.ruined ? ' (разрушено)' : '') : b.muni ? ` — руины, восстановление ${Math.round(progOf(b) * 100)}%` : ` — стройка ${Math.round(progOf(b) * 100)}%`), b.ruined ? '#ff8a6a' : def.pub ? '#ffe9a8' : '#cfe8b0', {occluded:true});
+  const lbl = MD.makeLabel((def.pub ? '' : '⌂ ') + def.name + (b.ownerName ? ` · ${b.ownerName}` : '') + (b.enemy ? ' (под властью врага)' : '') + (b.built ? (b.ruined ? ' (разрушено)' : '') : b.muni ? ` — руины, восстановление ${Math.round(progOf(b) * 100)}%` : ` — стройка ${Math.round(progOf(b) * 100)}%`), b.ruined ? '#ff8a6a' : def.pub ? '#ffe9a8' : '#cfe8b0');
   lbl.position.set(0, Math.min(16, def.r * 0.9 + 4), 0); obj.add(lbl);
   blds.set(b.id, { obj, data: b, key });
   if (o === undefined && S.started && b.built && Date.now() - (b.done || 0) < 5000) SND.play('build');
@@ -563,9 +534,8 @@ function syncBuilding(b) {
 
 // ---------- Жизнь города: работники хозяйств и горожане (только для красоты) ----------
 const life = [];
-let lifeKey = '',lifeNext=0;
+let lifeKey = '';
 function rebuildLife() {
-  const now=performance.now();if(now<lifeNext)return;lifeNext=now+500;
   const w = S.world || {}, idle = (w.slaves || []).filter((x) => !x.bld && !x.ship && !x.ludus && !x.squad).length;
   const key = S.blds.filter((b) => b.built && !b.ruined).map((b) => b.id + ':' + (b.workers || 0) + ':' + b.x + ':' + b.z).join(',') + '|' + (w.slaveMarket || []).length + '|' + idle;
   if (key === lifeKey) return; lifeKey = key;
@@ -649,22 +619,18 @@ let lastStateAt = 0;
 let bdKey = '', bdMeshes = [];
 function syncBoardDecks(list) {
   const key = JSON.stringify(list || []); if (key === bdKey) return; bdKey = key; WG.setBoardDecks(list || []);
-  for (const m of bdMeshes) {scene.remove(m);m.geometry.dispose();} bdMeshes = [];
+  for (const m of bdMeshes) scene.remove(m); bdMeshes = [];
   for (const d of list || []) if (d.plank) { const m = new THREE.Mesh(new THREE.BoxGeometry(d.hw * 2, 0.18, d.hl * 2), MD.M(0x8a6a44)); m.position.set(d.x, d.y - 0.1, d.z); m.rotation.y = d.ry; scene.add(m); bdMeshes.push(m); }
 }
 function onState(s) {
-  const arrival=performance.now()/1000,stamp=s.stamp??arrival;S.motionClock=Math.max(S.motionClock??-Infinity,stamp-arrival);
-  TN.syncTuna(s.tuna,ships);
-  if (s.wa && S.world) S.world.war = s.wa;
   syncBoardDecks(s.bd);
   S.st = s; S.serverT = s.t; S.timeAt = performance.now() / 1000; lastStateAt = performance.now();
   const [hp, mhp, st, mst, sat, alive, poison, bath] = s.me;
   Object.assign(S.me, { hp, mhp, st, mst, sat, alive: !!alive, poison: !!poison, bath: !!bath });
-  if(alive) UI.hideDead();
   if (!S.started) return;
   const seen = new Set();
   for (const a of s.p) {
-    const [id, x, z, ry, fl, hpp, ship, seat, inst, at, fish, jh, gatherTool] = a;
+    const [id, x, z, ry, fl, hpp, ship, seat, inst, at, fish, jh] = a;
     seen.add(id);
     if (id === S.myId) {
       S.ship = ship || null; S.seat = seat >= 0 ? seat : null;
@@ -674,12 +640,11 @@ function onState(s) {
     let o = players.get(id);
     const info = S.roster.get(id);
     if (!info) continue;
-    const displayLook=at?.[0]==='throw'?{...info.look,weapon:['pilum',0],offhand:null}:gatherTool?{...info.look,weapon:[gatherTool==='pick'?'pick':gatherTool==='axe'?'axe':null,0],offhand:null}:info.look;
-    const lk = lookKey(displayLook) + info.color;
+    const lk = lookKey(info.look) + info.color;
     if (!o || o.lk !== lk) {
       if (o) scene.remove(o.obj);
-      const obj = makeHumanFor(info.cid, displayLook, info.color);
-      applyLook(obj, displayLook);
+      const obj = makeHumanFor(info.cid, info.look, info.color);
+      applyLook(obj, info.look);
       R.optimizeStatic(obj);
       const lbl = MD.makeLabel(`${info.office ? D.OFFICES[info.office].icon + ' ' : ''}${info.name} · ${info.level}`, '#d8f0ff');
       lbl.position.set(0, 2.45, 0); obj.add(lbl); lbl.userData.base = lbl.scale.clone();
@@ -695,7 +660,7 @@ function onState(s) {
   // существа
   const ms = new Set();
   for (const a of s.m) {
-    const [id, type, x, z, ry, hpp, st2, lvl, wind, sq, gid, gname, foe] = a;
+    const [id, type, x, z, ry, hpp, st2, lvl, wind, sq, gid, gname] = a;
     ms.add(id);
     let o = mobs.get(id);
     if (!o) {
@@ -704,6 +669,7 @@ function onState(s) {
       if (def.human) { obj = makeHumanFor(id, null, null, def.faction); const g = def.gear || {}; MD.setGear(obj, { weapon: g.w || null, offhand: g.off || null, head: g.head || null, body: g.body || null, legs: null, q: def.boss ? 3 : 0 }); }
       else if (def.model === 'wagon' && MC.makeWagon) obj = MC.makeWagon();
       else if (def.model === 'scorpio') obj = makeScorpio();
+      else if (def.training) obj = MD.makeTrainingTarget();
       else if (def.critter && ME.makeCritter) obj = ME.makeCritter(def.critter);
       else obj = MD.makeAnimal(def.model || type);
       if (def.boss && !def.human) {} else if (def.boss) obj.scale.setScalar(1.12);
@@ -717,9 +683,8 @@ function onState(s) {
       o = { obj, type, def, x, z, ry, tx: x, tz: z, tr: ry, bar, lbl, deadT: 0, sp: 0 };
       mobs.set(id, o);
     }
-    o.history||=[];pushMotion(o.history,{t:stamp,x,z,ry,moving:st2===1||st2===4});
     if (st2 === 3 && o.st !== 3) { o.deadT = performance.now() / 1000; }
-    Object.assign(o, { tx: x, tz: z, tr: ry, hpp, st: st2, wind, sq: sq || 0, gid: gid || 0, gname: gname || '', id, foe: !!foe });
+    Object.assign(o, { tx: x, tz: z, tr: ry, hpp, st: st2, wind, sq: sq || 0, gid: gid || 0, gname: gname || '' });
   }
   for (const [id, o] of mobs) if (!ms.has(id)) { scene.remove(o.obj); mobs.delete(id); updateHorse('m' + id, null); }
   // корабли
@@ -729,7 +694,7 @@ function onState(s) {
   for (const a of s.pr) {
     const [id, kind, x, y, z, vx, vy, vz] = a; ps.add(id);
     let o = projs.get(id);
-    if (!o) { const obj = kind === 'arrow' || kind === 'bolt' ? MD.makeArrow() : kind === 'pilum' ? MD.makePilum() : MD.makeSlingStone(); if (kind === 'boulder') obj.scale.setScalar(6); if (kind === 'bolt') obj.scale.set(1.8,1.8,2.4); scene.add(obj); o = { obj }; projs.set(id, o); if (kind !== 'stone') SND.play('bow', 0.6); }
+    if (!o) { const obj = kind === 'arrow' ? MD.makeArrow() : kind === 'pilum' ? MD.makePilum() : MD.makeSlingStone(); if (kind === 'boulder') obj.scale.setScalar(6); scene.add(obj); o = { obj }; projs.set(id, o); if (kind !== 'stone') SND.play('bow', 0.6); }
     Object.assign(o, { x, y, z, vx, vy, vz, t: performance.now() / 1000 });
   }
   for (const [id, o] of projs) if (!ps.has(id)) { scene.remove(o.obj); projs.delete(id); }
@@ -777,31 +742,22 @@ function syncShips(list, map, enemy) {
       lbl.position.set(0, Math.max(5, def.len * 0.45), 0); obj.add(lbl);
       const bar = hpBar(3); bar.position.set(0, Math.max(5, def.len * 0.45) - 0.4, 0); obj.add(bar);
       obj.position.set(x, 0, z); obj.rotation.y = ry;
-      scene.add(obj); o = { id, obj, type, x, z, ry, tx: x, tz: z, tr: ry, speed, bar, enemy };
+      scene.add(obj); o = { obj, type, x, z, ry, tx: x, tz: z, tr: ry, speed, bar, enemy };
       map.set(id, o);
     }
     Object.assign(o, { tx: x, tz: z, tr: ry, speed, hpp });
     if (!enemy) { // рабы-лучники стоят на палубе
-      const info = S.world && S.world.ships.find((q) => q.id === id);syncShipCrates(o,info?.crates||[]);
-      const na = info && info.archers ? Math.min(8, info.archers.length) : 0, n = Math.min(14, na + ((info && info.troops) || 0));
+      const info = S.world && S.world.ships.find((q) => q.id === id), na = info && info.archers ? Math.min(8, info.archers.length) : 0, n = Math.min(14, na + ((info && info.troops) || 0));
       if (o.archN !== n) {
         o.archN = n; const host = o.obj.userData.rock || o.obj; for (const a2 of o.arch || []) host.remove(a2); o.arch = [];
         const seats = o.obj.userData.seats || [], L = (enemy ? D.ENEMY_SHIPS[type] : SHIPS[type]).len;
         for (let i = 0; i < n; i++) { const h = makeHumanFor('ar' + id + i, null, 0x8a7a62, null); MD.setGear(h, i < na ? { weapon: 'bow', offhand: null, head: null, body: null, legs: null } : { weapon: 'gladius', offhand: 'scutum', head: 'galea_iron', body: 'hamata', legs: null });
-          MD.animateHuman(h,1/30,{speed:0});R.optimizeStatic(h,{rigid:true});
           const sv = seats.length ? seats[(seats.length - 1 - i % seats.length + seats.length) % seats.length] : null, side = i % 2 ? 1 : -1;
           h.position.set(sv ? sv.x + side * 0.6 : side * 0.9, sv ? sv.y : 1.2, sv ? sv.z - 0.8 - Math.floor(i / 2) * 0.9 : -L * 0.25 + Math.floor(i / 2) * 1.2); host.add(h); o.arch.push(h); }
       }
     }
   }
   for (const [id, o] of map) if (!seen.has(id)) { if (enemy) spawnSplash(o.obj.position.x, o.obj.position.z, 3); scene.remove(o.obj); map.delete(id); }
-}
-
-function syncShipCrates(ship,crates){
- const signature=crates.join('|');if(ship.crateSignature===signature)return;ship.crateSignature=signature;
- const host=ship.obj.userData.rock||ship.obj;
- for(const old of ship.crateMeshes||[]){host.remove(old);old.traverse(o=>{if(o.userData.compiledGeometry)o.geometry.dispose();});}
- ship.crateMeshes=crates.map((kind,i)=>{const mesh=MD.makeTradeCrate(D.CRATES[kind]?.grade||1);R.optimizeStatic(mesh,{rigid:true});const slot=crateDeckSlot(ship.type,i,ship.obj.userData.deckY);mesh.position.set(slot.x,slot.y,slot.z);mesh.scale.setScalar(slot.scale);mesh.name='loadedTradeCrate';host.add(mesh);return mesh;});
 }
 
 // ---------- Эффекты ----------
@@ -834,7 +790,7 @@ function onFx(m) {
     case 'board': spawnBits(m.x, 2.5, m.z, 0xa01818, 8, 3, 0.5); UI.floatText(m.x, 3.5, m.z, 'абордаж −' + m.n, '#ffb070'); SND.play('clang'); break;
     case 'mdie': { const o = mobs.get(m.id); if (o) { o.st = 3; o.deadT = performance.now() / 1000; } break; }
     case 'kneel': { const o = mobs.get(m.id); if (o) o.st = 6; UI.floatText(m.x, groundAt(m.x, m.z) + 2.4, m.z, 'сдаётся!', '#ffe08a'); break; }
-    case 'mgone': { updateHorse('m' + m.id, null); const o = mobs.get(m.id); if (o) { scene.remove(o.obj); mobs.delete(m.id); } break; }
+    case 'mgone': { const o = mobs.get(m.id); if (o) { scene.remove(o.obj); mobs.delete(m.id); } break; }
     case 'levelup': spawnRing(m.x, groundAt(m.x, m.z), m.z, 0xffd24a, 3, 1.2); spawnBits(m.x, groundAt(m.x, m.z) + 1, m.z, 0xffd24a, 24, 3, 1.2); break;
     case 'heal': spawnBits(m.x, groundAt(m.x, m.z) + 1, m.z, 0x8aff8a, 12, 1.5, 0.9); break;
     case 'chest': { const c = chestObjs.get(m.id); if (c) spawnBits(c.c.x, c.o.position.y + 0.8, c.c.z, 0xffe08a, 14, 2, 0.8); SND.play('pickup'); break; }
@@ -894,22 +850,21 @@ const canvas = R.renderer.domElement;
 $('game').appendChild(canvas);
 canvas.addEventListener('mousedown', (e) => {
   if (!S.started) return;
-  if (RTS.on) { if (e.button === 0 && S.placing) { UI.confirmPlacing(); return; } tacticalDown(e); return; }
+  if (RTS.on) { if (e.button === 0 && S.placing) { UI.confirmPlacing(); return; } rtsClick(e.button === 2); return; }
   if (document.pointerLockElement !== canvas && !S.placing) { canvas.requestPointerLock(); if (e.button === 0) return; }
   if (e.button === 0) { mouseL = true; onLeftClick(); }
-  if (e.button === 2) { mouseR = true; if(rangedHold){cancelRanged();return;} if (S.placing) { UI.cancelPlacing(); return; } setBlock(true); }
+  if (e.button === 2) { mouseR = true; if (S.placing) { UI.cancelPlacing(); return; } setBlock(true); }
 });
-addEventListener('mouseup', (e) => { if (RTS.on) tacticalUp(e); if (e.button === 0) {mouseL = false;if(rangedHold?.kind==='bow')releaseRanged();} if (e.button === 2) { mouseR = false; setBlock(false); } });
+addEventListener('mouseup', (e) => { if (e.button === 0) mouseL = false; if (e.button === 2) { mouseR = false; setBlock(false); } });
 addEventListener('contextmenu', (e) => { if (S.started) e.preventDefault(); });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement === canvas) { camYaw -= e.movementX * 0.0026; camPitch = Math.max(-0.35, Math.min(1.25, camPitch + e.movementY * 0.0022)); }
-  if (RTS.on && RTS.drag?.button === 1) { camYaw -= e.movementX * .006; RTS.pitch = Math.max(.4, Math.min(1.2, RTS.pitch + e.movementY * .003)); }
   S.mouse = { x: e.clientX, y: e.clientY };
 });
 addEventListener('wheel', (e) => { if (!S.started || UI.anyModal()) return; if (S.placing) { if (S.placing.demolish) return; if (S.placing.claim) { S.placing.n = Math.max(1, Math.min(8, S.placing.n - Math.sign(e.deltaY))); return; } S.placing.ry += Math.sign(e.deltaY) * (S.placing.cellSnap || S.placing.bt === 'via_turn' || S.placing.bt === 'via_cross' ? Math.PI / 2 : BUILDINGS[S.placing.bt].road ? Math.PI / 8 : 0.2); S.placing.turned = true; return; } if (RTS.on) { RTS.dist = Math.max(30, Math.min(220, RTS.dist * (e.deltaY > 0 ? 1.12 : 0.9))); return; } camDist = Math.max(2.8, Math.min(S.ship ? 45 : 18, camDist + Math.sign(e.deltaY) * (S.ship ? 2.5 : 0.8))); }, { passive: true });
 let blocking = false;
 function setBlock(on) { if (on === blocking) return; if (on && (S.ship || !S.me.alive || UI.anyModal())) return; blocking = on; net({ type: 'block', on }); }
-export function setChatting(v) { chatting = v;if(v)cancelRanged(); }
+export function setChatting(v) { chatting = v; }
 addEventListener('keydown', (e) => {
   if (!S.started) return;
   if (chatting) return;
@@ -917,7 +872,6 @@ addEventListener('keydown', (e) => {
   const k = e.code;
   keys[k] = true;
   if (e.repeat) return; // автоповтор клавиши не должен сбрасывать удержание E и переключать окна
-  if(k==='KeyH'&&!UI.anyModal()&&TN.toggleHarpoon()){e.preventDefault();return;}
   if (UI.handleKey(k, e)) { e.preventDefault(); return; }
   if (UI.anyModal()) return;
   if (k === 'KeyR' && S.placing && S.placing.bt && !S.placing.claim && !S.placing.demolish) { const pl = S.placing; pl.ry += pl.cellSnap || pl.bt === 'via_turn' || pl.bt === 'via_cross' ? Math.PI / 2 : BUILDINGS[pl.bt].road ? Math.PI / 8 : Math.PI / 4; pl.turned = true; return; } // R — повернуть здание при стройке и переносе
@@ -927,28 +881,27 @@ addEventListener('keydown', (e) => {
   else if (k === 'KeyX' && S.ship && S._shipTrader != null) UI.openTrader(S._shipTrader);
   else if (k === 'KeyX') net({ type: 'crateDrop' });
   else if (k === 'KeyZ') toggleRts();
-  else if (k === 'Digit1' || k === 'Digit2' || k === 'Digit3' || k === 'Digit4' || k === 'Digit5') selectSquad(Number(k.slice(5)) - 1, e.shiftKey);
-  else if (k === 'Digit0') { net({ type: 'squadCancel' }); S.selSquad = null; S.selectedSquads = []; }
+  else if (k === 'Digit1' || k === 'Digit2' || k === 'Digit3' || k === 'Digit4' || k === 'Digit5') selectSquad(Number(k.slice(5)) - 1);
+  else if (k === 'Digit0') { net({ type: 'squadCancel' }); S.selSquad = null; }
   else if (k === 'KeyN') squadCmd('move', aimPoint());
   else if (k === 'KeyO') squadCmd('follow');
   else if (k === 'Digit6') squadCmd('hold');
   else if (k === 'KeyL') squadCmd('form');
   else if (k === 'KeyF' && S.ship && S.world && SHIPS[(S.world.ships.find((x) => x.id === S.ship) || {}).type]?.catapult) { net({ type: 'catapult', aim: aimMsg() }); }
-  else if (k === 'KeyF') startRanged('pilum');
+  else if (k === 'KeyF') { net({ type: 'throw', ry: camYaw + Math.PI, pitch: camPitch * -0.8 + 0.25, aim: aimMsg() }); myAtk = { kind: 'throw', t: performance.now() / 1000, combo: 0 }; }
   else if (k === 'KeyT') net({ type: 'torch' });
-  else if (k === 'KeyV'&&!S.spect&&!S.seatingPending) net({ type: 'mount' });
+  else if (k === 'KeyV') net({ type: 'mount' });
   else if (k === 'KeyR') net({ type: 'heal' });
   else if (k === 'KeyY') net({ type: 'eat' });
   else if (k === 'KeyK') { const on = SND.toggle(); UI.addLog(on ? 'Звук включён' : 'Звук выключен', 'info'); }
   else if (k === 'KeyP') UI.cycleGfx();
 });
-addEventListener('keyup', (e) => { keys[e.code] = false;if(e.code==='KeyF'&&rangedHold?.kind==='pilum')releaseRanged(); if (e.code === 'KeyE') {holdE=null;net({type:'gatherPose',active:false});} });
-addEventListener('blur', () => { cancelRanged(); for (const k in keys) keys[k] = false; mouseL = false; setBlock(false); });
+addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'KeyE') holdE = null; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseL = false; setBlock(false); });
 
 function aimYaw() { return camYaw + Math.PI; }
 function onLeftClick() {
   if (UI.anyModal()) return;
-  if(TN.fireHarpoon())return;
   if (S.placing) { UI.confirmPlacing(); return; }
   if (!S.me.alive || !S.char) return;
   const w = S.char.gear.weapon && GEAR[S.char.gear.weapon.k];
@@ -958,47 +911,16 @@ function onLeftClick() {
     myAtk = { kind: 'rod', t: performance.now() / 1000, combo: 0 };
     return;
   }
-  if (S.char.carry || S.char.tunaCarry) return; // руки заняты ящиком
+  if (S.char.carry) return; // руки заняты ящиком
   if (S.ship && (!w || w.kind !== 'bow')) { // с палубы — абордаж, если рядом вражеский корабль
     const so = ships.get(S.ship); if (!so) return;
     if (![...eships.values()].some((e) => Math.hypot(e.obj.position.x - so.obj.position.x, e.obj.position.z - so.obj.position.z) < 16 + SHIPS[so.type].len / 2)) return;
   }
-  if(w?.kind==='bow'){startRanged('bow');return;}
   const t = performance.now() / 1000;
   const dur = (ATK_DUR[w ? w.kind : 'fist'] || 0.6) / (1 + (S.char.stats.agi || 0) * 0.02);
   if (myAtk && t - myAtk.t < dur * 0.75) { queuedAtk = true; return; }
   doAttack(t);
 }
-let rangedHold=null,rangedReady=0;
-function startRanged(kind){
- if(rangedHold||!S.char||!S.me.alive||S.spect||S.placing||S.char.carry||S.char.tunaCarry||blocking||performance.now()/1000<rangedReady)return;
- const ammo=kind==='bow'?'arrow':'pilum';if(!(S.char.bag[ammo]>0)){UI.addLog(kind==='bow'?'Нет стрел.':'Нет пилумов.','warn');return;}
- if(S.me.st<RANGED[kind].stamina)return;
- queuedAtk=false;rangedHold={kind,t:performance.now()/1000};net({type:'rangedStart',kind});
-}
-function cancelRanged(){if(!rangedHold)return;rangedHold=null;net({type:'rangedCancel'});}
-function freeAimDirection(){
- ray.setFromCamera(new THREE.Vector2(0,0),camera);let distance=120;
- // Aim at the surface under the reticle, not the centre of a nearby enemy.
- for(let t=1;t<=120;t+=.4){const p=ray.ray.at(t,new THREE.Vector3());const h=S.inst?S.inst.y0:Math.max(0,WG.terrainHeight(p.x,p.z));if(p.y<h){distance=t;break;}}
- const objects=[...mobs.values(),...players.values(),...eships.values(),...blds.values()].map(o=>o.obj).filter(o=>o?.visible);
- const hits=ray.intersectObjects(objects,true);if(hits.length&&hits[0].distance<distance)distance=hits[0].distance;
- const point=ray.ray.at(distance,new THREE.Vector3());point.sub(new THREE.Vector3(S.me.x,S.me.y+(rangedHold?.kind==='pilum'?1.8:1.5),S.me.z)).normalize();return [point.x,point.y,point.z];
-}
-function releaseRanged(){
- const h=rangedHold;if(!h)return;if(UI.anyModal()||!S.me.alive||S.placing){cancelRanged();return;}
- const dir=freeAimDirection();rangedHold=null;const t=performance.now()/1000;
- if(t-h.t<RANGED[h.kind].min){net({type:'rangedCancel'});return;}
- net({type:h.kind==='bow'?'atk':'throw',dir});S.me.ry=Math.atan2(dir[0],dir[2]);
- myAtk={kind:h.kind==='bow'?'bow':'throw',t:t-(h.kind==='bow'?.5:.495),combo:0};rangedReady=t+(h.kind==='bow'?.65:.85);SND.play('bow');
-}
-function updateRanged(){
- const cross=$('cross');if(!cross)return;
- if(rangedHold&&(UI.anyModal()||RTS.on||!S.me.alive||S.placing||S.char.carry||S.char.tunaCarry||S.spect||S.me.st<RANGED[rangedHold.kind].stamina||performance.now()/1000-rangedHold.t>12))cancelRanged();
- const active=!!rangedHold;cross.classList.toggle('ranged',active);
- if(active){const p=rangedProfile(rangedHold.kind,performance.now()/1000-rangedHold.t,{speed:moveSpeed,running:S.me.run,mounted:S.char.mounted,stamina:S.me.st/S.me.mst});cross.style.setProperty('--spread',Math.round(8+p.spread*700)+'px');cross.style.setProperty('--draw',Math.round(p.power*100)+'%');cross.title='ЛКМ — отпуск тетивы; F — отпуск пилума; ПКМ — отмена';S.me.ry=aimYaw();}
-}
-
 let queuedAtk = false;
 function doAttack(t) {
   const w = S.char.gear.weapon && GEAR[S.char.gear.weapon.k];
@@ -1010,7 +932,6 @@ function doAttack(t) {
   SND.play(w && w.kind === 'bow' ? 'bow' : 'swing');
 }
 function doDodge() {
-  cancelRanged();
   const t = performance.now() / 1000;
   if (!S.me.alive || S.ship || t - dodgeT < 0.75 || S.me.st < CFG.stamina.dodge) return;
   dodgeT = t;
@@ -1055,13 +976,13 @@ function aimPoint(maxD = 140) {
   return { x: _ro.x + _rd.x * maxD, y: _ro.y + _rd.y * maxD, z: _ro.z + _rd.z * maxD };
 }
 const aimMsg = () => { const a = aimPoint(); return [Math.round(a.x * 10) / 10, Math.round(a.y * 10) / 10, Math.round(a.z * 10) / 10]; };
-const bowMode = () => { const w = S.char && S.char.gear.weapon && GEAR[S.char.gear.weapon.k]; return (!!(w && w.kind === 'bow')||rangedHold?.kind==='pilum') && !S.placing; };
+const bowMode = () => { const w = S.char && S.char.gear.weapon && GEAR[S.char.gear.weapon.k]; return !!(w && w.kind === 'bow') && !S.placing; };
 export function groundPointAtMouse() {
   const v = new THREE.Vector2(S.mouse ? (S.mouse.x / innerWidth) * 2 - 1 : 0, S.mouse ? -(S.mouse.y / innerHeight) * 2 + 1 : 0);
   if (document.pointerLockElement === canvas) v.set(0, 0);
   ray.setFromCamera(v, camera);
   const o = ray.ray.origin, d = ray.ray.direction;
-  for (let t = 1; t < 800; t += 2) { const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t; if (y < WG.terrainHeight(x, z)) return { x, z }; }
+  for (let t = 1; t < 160; t += 1) { const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t; if (y < WG.terrainHeight(x, z)) return { x, z }; }
   return null;
 }
 
@@ -1072,7 +993,6 @@ function findFocus() {
   const consider = (d, f) => { if (d < bd) { bd = d; best = f; } };
   if (!me.alive) return null;
   if (S.ship) {
-    const wdeck=WG.wreckDecks().find(d=>Math.hypot(d.x-me.x,d.z-me.z)<(SHIPS[ships.get(S.ship)?.type]?.len||8)/2+7);if(wdeck)return{kind:'wreckBoard',id:wdeck.id,text:'E — перейти на обломки и осмотреть сундук'};
     const so = ships.get(S.ship), sx = so ? so.obj.position.x : me.x, sz = so ? so.obj.position.z : me.z, L = SHIPS[so ? so.type : 'scapha'].len;
     const moored0 = S.world && (S.world.ships.find((x) => x.id === S.ship) || {}).berth;
     if (!moored0) for (const [id, o] of crateObjs) { const d = Math.hypot(o.x - sx, o.z - sz); if (!o.ground && d < L / 2 + 9) return { kind: 'cratePick', id, text: 'E — поднять плавающий ящик на борт' }; }
@@ -1095,8 +1015,7 @@ function findFocus() {
   for (const r of S.W.research || []) { if (Math.abs(r.x - me.x) > 6 || Math.abs(r.z - me.z) > 6) continue; const d = Math.hypot(r.x - me.x, r.z - me.z); if (d < 3.5) { const done = S.char.sci && S.char.sci.rec[r.island + '|f:' + r.sp]; consider(d - 1.5, { kind: 'sciSample', id: r.id, text: done ? `🌿 ${D.PLANT_NAMES[r.sp]} — уже описано` : `E — описать растение: ${D.PLANT_NAMES[r.sp]}` }); } }
   for (const [id, o] of mobs) { if (!o.def.critter || o.st === 3) continue; const d = Math.hypot(o.obj.position.x - me.x, o.obj.position.z - me.z); if (d < 3.2) consider(d - 1.5, { kind: 'sciCatch', id, text: `E — поймать сетью: ${o.def.name} (сетей: ${(S.char.sci && S.char.sci.tools.net) || 0})` }); }
   // башни: подняться / спуститься
-  if(!WG.wreckDeckAt(me.x,me.z)){const d=WG.wreckDecks().find(d=>Math.hypot(d.x-me.x,d.z-me.z)<8);if(d)consider(1,{kind:'wreckBoard',id:d.id,text:'E — подняться на обломки'});}
-  if(S.spect)return{kind:'bld',id:S.spect.bid,text:'E — меню арены · ставки и игры · выход с трибуны'};
+  if (S.spect) return { kind: 'arenaLeave', text: 'E — встать и уйти с трибуны' };
   if (S.tower) return { kind: 'towerDown', text: 'E — спуститься с башни · стреляйте из лука по врагам' };
   for (const t of towers) { if (Math.abs(t.x - me.x) > 8 || Math.abs(t.z - me.z) > 8) continue; const d = Math.hypot(t.x - me.x, t.z - me.z); if (d < t.half + 3) consider(d - 2.5, { kind: 'towerUp', t, text: `E — подняться на ${t.gate ? 'надвратную башню' : 'башню'}` }); }
   // ворота своего города: должностные лица запирают и открывают
@@ -1149,8 +1068,7 @@ function onInteract() {
   if (S.tunaHelpUntil && performance.now() < S.tunaHelpUntil) { net({ type: 'tunaPull' }); return; }
   const f = focus; if (!f) return;
   switch (f.kind) {
-    case 'wreckBoard': if(S.ship&&S.seat===0)net({type:'helm',f:0,t:0});S.wreckBoardPending=performance.now();net({type:'wreckBoard',id:f.id});break;
-    case 'chest': if(!S.ship)net({type:'mv',x:S.me.x,z:S.me.z,y:S.me.y,ry:S.me.ry,run:!!S.me.run,a:0,jh:jumpH||0});net({ type: 'open', id: f.id }); break;
+    case 'chest': net({ type: 'open', id: f.id }); break;
     case 'cratePick': net({ type: 'cratePick', id: f.id }); break;
     case 'enslave': net({ type: 'enslave', id: f.id }); break;
     case 'tame': net({ type: 'tame', id: f.id }); break;
@@ -1163,15 +1081,15 @@ function onInteract() {
     case 'sciCatch': net({ type: 'sciCatch', mid: f.id }); break;
     case 'plunder': net({ type: 'plunder', poi: f.poi }); break;
     case 'city': UI.openCity(f.id); break;
-    case 'node': cancelRanged(); holdE = { id: f.id, t: 0 };net({type:'gatherPose',id:f.id}); break;
+    case 'node': holdE = { id: f.id, t: 0 }; break;
     case 'ship': net({ type: 'board', sid: f.id }); break;
     case 'leave': net({ type: 'leave' }); break;
     case 'bld': UI.openBuilding(f.id); break;
     case 'rostra': UI.openSpeech(f.id); break;
     case 'gate': net({ type: 'gateToggle', city: f.city }); break;
     case 'war': UI.openWar(); break;
-    case 'arenaLeave': arenaLeave();break;
-    case 'towerUp': { if(S.char.mounted){net({type:'mount'});S.char.mounted=false;} const T = f.t; S.tower = T; S.me.x = T.x; S.me.z = T.z; UI.addLog('🏹 Вы на башне: стреляйте из лука (ЛКМ) по наступающим. E — спуститься.', 'info'); break; }
+    case 'arenaLeave': { const sp = S.spect; S.spect = null; S.me.x = sp.ox; S.me.z = sp.oz; S._perchT = performance.now() + 1500; break; }
+    case 'towerUp': { if (S.char.mounted) { net({ type: 'mount' }); S.char.mounted = false; } const T = f.t; S.tower = T; S.me.x = T.x; S.me.z = T.z; UI.addLog('🏹 Вы на башне: стреляйте из лука (ЛКМ) по наступающим. E — спуститься.', 'info'); break; }
     case 'towerDown': { const T = S.tower, Cy = S.W.cities.find((c) => c.id === T.city); S.tower = null; const a = Math.atan2(Cy.x - T.x, Cy.z - T.z); S.me.x = T.x + Math.sin(a) * (T.half + 2.2); S.me.z = T.z + Math.cos(a) * (T.half + 2.2); S._perchT = performance.now() + 1500; break; }
     case 'inst': UI.openInstance(f.key); break;
     case 'instExit': net({ type: 'instExit' }); break;
@@ -1187,15 +1105,13 @@ function updateHold(dt) {
   S.me.ry = Math.atan2(n.x - S.me.x, n.z - S.me.z);
   if (!myAtk || performance.now() / 1000 - myAtk.t > 0.85) { myAtk = { kind: n.tool === 'pick' ? 'tool' : n.tool === 'axe' ? 'axe' : 'fist', t: performance.now() / 1000, combo: 0, gather: true }; setTimeout(() => SND.play(n.tool === 'pick' ? 'dig' : 'chop'), 350); }
   UI.showHold(Math.min(1, holdE.t / 1.15));
-  if (holdE.t >= 1.15) { holdE.t = 0; net({type:'gatherPose',id:n.id});net({ type: 'gather', id: n.id }); }
+  if (holdE.t >= 1.15) { holdE.t = 0; net({ type: 'gather', id: n.id }); }
 }
 
 // ---------- Движение ----------
 let sendT = 0, moveSpeed = 0;
 function updateMe(dt) {
   const me = S.me, c = S.char;
-  if(S.wreckBoardPending){moveSpeed=0;if(performance.now()-S.wreckBoardPending>3000)S.wreckBoardPending=null;else return;}
-  if(S.seatingPending){moveSpeed=0;S.horseVelocity=0;if(performance.now()-S.seatingPending.at>5000)S.seatingPending=null;else return;}
   if (S.ship) {
     // руль
     if (S.seat === 0) { const f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), t = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0); if (!S.helmT || performance.now() - S.helmT > 100) { S.helmT = performance.now(); net({ type: 'helm', f: UI.anyModal() || chatting ? 0 : f, t: UI.anyModal() || chatting ? 0 : t }); } }
@@ -1203,12 +1119,12 @@ function updateMe(dt) {
     me.y = 0.9; moveSpeed = 0; me.swim = false; me.run = false; return;
   }
   if (!me.alive || !c) { moveSpeed = 0; S.spect = null; return; }
-  if (S.spect) { me.x = S.spect.x; me.z = S.spect.z; me.y = S.spect.y; me.ry = S.spect.ry; moveSpeed = 0; me.swim = false; me.run = false; sendT -= dt; if (sendT <= 0) { sendT = 0.2; net({ type: 'mv', pj: 1, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, y: Math.round(me.y * 10) / 10, ry: Math.round(me.ry * 100) / 100, run: false, a: 0, jh: Math.round((me.y - bodyY(me.x, me.z)) * 10) / 10 }); } return; } // зритель сидит на трибуне
+  if (S.spect) { me.x = S.spect.x; me.z = S.spect.z; me.y = S.spect.y; me.ry = S.spect.ry; moveSpeed = 0; me.swim = false; me.run = false; sendT -= 1 / 60; if (sendT <= 0) { sendT = 0.2; net({ type: 'mv', pj: 1, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, y: Math.round(me.y * 10) / 10, ry: Math.round(me.ry * 100) / 100, run: false, a: 0, jh: Math.round((me.y - bodyY(me.x, me.z)) * 10) / 10 }); } return; } // зритель сидит на трибуне
   const t = performance.now() / 1000;
   let f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), r = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
   if (chatting || UI.anyModal()) { f = 0; r = 0; }
   if (RTS.on) { // вид сверху: WASD двигают камеру, персонаж стоит
-    const sp = 60 * dt * (RTS.dist / 80) * 1.4;
+    const sp = 60 * (1 / 60) * (RTS.dist / 80) * 1.4;
     RTS.cx += (-Math.sin(camYaw) * -f + Math.cos(camYaw) * r) * sp; RTS.cz += (-Math.cos(camYaw) * -f - Math.sin(camYaw) * r) * sp;
     f = 0; r = 0;
   }
@@ -1221,30 +1137,27 @@ function updateMe(dt) {
     dir = Math.atan2(-r, f) + camYaw + Math.PI;
     const base = swim ? CFG.swim * (1 + D.specOf(c, 'sail') * 0.1) : run ? CFG.run : CFG.walk;
     speed = base * (1 + (c.stats.agi || 0) * 0.01) * (1 - (c.slow || 0)) * (blocking ? 0.45 : 1);
-    if(rangedHold&&!c.mounted)speed*=.65;
     if (myAtk && t - myAtk.t < 0.4 && !myAtk.gather) speed *= 0.4;
     if (c.bagW > c.bagMax) speed *= 0.6;
     if (c.carry) speed *= 0.8;
-    if(c.tunaCarry)speed*=.55;
-    if (c.mounted && c.horseOut && !swim) { speed = 1; }
+    if (c.mounted && c.horseOut && !swim) { const hk = myHorseKind(), hh = (c.horses || []).find((x) => x.id === c.horseOut); speed *= hk ? D.HORSES[hk].speed * (hh && (hh.sat ?? 100) < 30 ? 0.75 : 1) : 1; }
     else if (onRoad(me.x, me.z) || WG.onRoadNet(me.x, me.z)) speed *= 1.25;
   }
-  if (c.mounted && c.horseOut && !swim) { const hh = (c.horses || []).find(h => h.id === c.horseOut), motion = horseMotion(S.horseVelocity || 0, me.ry, dir, !!(f || r), run, hh?.kind, dt, (hh?.sat ?? 100) < 30); S.horseVelocity = motion.speed; speed = motion.speed; dir = motion.heading; me.ry = motion.heading; } else S.horseVelocity = 0;
   // лицом — в сторону атаки/блока, иначе — по ходу
-  if (!c.mounted && (blocking || (myAtk && t - myAtk.t < 0.5 && !myAtk.gather) || UI.fishActive())) me.ry = lerpAng(me.ry, aimYaw(), Math.min(1, dt * 14));
-  else if (!c.mounted && speed > 0) me.ry = lerpAng(me.ry, dir, Math.min(1, dt * 12));
+  if (blocking || (myAtk && t - myAtk.t < 0.5 && !myAtk.gather) || UI.fishActive()) me.ry = lerpAng(me.ry, aimYaw(), Math.min(1, dt * 14));
+  else if (speed > 0) me.ry = lerpAng(me.ry, dir, Math.min(1, dt * 12));
   if (speed > 0) {
     let nx = me.x + Math.sin(dir) * speed * dt, nz = me.z + Math.cos(dir) * speed * dt;
     if (S.inst) {
       if (!instWalk(nx, nz)) { if (instWalk(nx, me.z)) nz = me.z; else if (instWalk(me.x, nz)) nx = me.x; else { nx = me.x; nz = me.z; } }
     } else {
       // крутые склоны гор не пускают
-      const h0=bodyY(me.x,me.z),h1=bodyY(nx,nz),platform=onDeck(me.x,me.z)||onDeck(nx,nz);
-      if(h1-h0>(platform?1.5:speed*dt*1.6)&&h1>2) { nx = me.x; nz = me.z; }
+      const h0 = WG.terrainHeight(me.x, me.z), h1 = WG.terrainHeight(nx, nz);
+      if (h1 - h0 > speed * dt * 1.6 && h1 > 2) { nx = me.x; nz = me.z; }
       if (S.tower) { const T = S.tower, c2 = Math.cos(T.a), s2 = Math.sin(T.a); let lx = (nx - T.x) * c2 - (nz - T.z) * s2, lz = (nx - T.x) * s2 + (nz - T.z) * c2; lx = Math.max(-T.half + 0.4, Math.min(T.half - 0.4, lx)); lz = Math.max(-T.half + 0.4, Math.min(T.half - 0.4, lz)); nx = T.x + lx * c2 + lz * s2; nz = T.z - lx * s2 + lz * c2; } // на башне — в пределах площадки
       else { const cc = collide(nx, nz); nx = cc.x; nz = cc.z; }
       // арена во время боя: на песок — только бойцы, бойцы — не уходят до конца боя
-      { const A = S.st && S.st.ar; if (A && A.st !== 'prep') { const ab = S.blds.find((b) => b.type === 'amphitheatrum' && b.built && Math.abs(b.x - A.x) < 2 && Math.abs(b.z - A.z) < 2); if (ab) { const fl = (x, z) => { const cs = Math.cos(ab.ry || 0), sn = Math.sin(ab.ry || 0), lx = (x - ab.x) * cs - (z - ab.z) * sn, lz = (x - ab.x) * sn + (z - ab.z) * cs; return (lx / 34.425) ** 2 + (lz / 23.625) ** 2 < 1; };
+      { const A = S.st && S.st.ar; if (A && A.st !== 'prep') { const ab = S.blds.find((b) => b.type === 'amphitheatrum' && b.built && Math.abs(b.x - A.x) < 2 && Math.abs(b.z - A.z) < 2); if (ab) { const fl = (x, z) => { const cs = Math.cos(ab.ry || 0), sn = Math.sin(ab.ry || 0), lx = (x - ab.x) * cs - (z - ab.z) * sn, lz = (x - ab.x) * sn + (z - ab.z) * cs; return (lx / 25.5) ** 2 + (lz / 17.5) ** 2 < 1; };
         const mine = (A.f || []).includes(S.myId), was = fl(me.x, me.z), will = fl(nx, nz);
         if (!mine && !was && will) { nx = me.x; nz = me.z; if (!S._arWarn || t - S._arWarn > 4) { S._arWarn = t; UI.addLog('Идёт бой: на песок выходят только бойцы. Смотрите с трибуны (E у арены → «Сесть на трибуну»).', 'warn'); } }
         else if (mine && was && !will) { nx = me.x; nz = me.z; if (!S._arWarn || t - S._arWarn > 4) { S._arWarn = t; UI.addLog('Бойцы покидают арену только после окончания боя.', 'warn'); } } } } }
@@ -1259,7 +1172,7 @@ function updateMe(dt) {
   me.y = (S.tower ? S.tower.y : bodyY(me.x, me.z)) + jumpH;
   me.swim = swim; me.run = run && speed > 0;
   if (queuedAtk && myAtk) { const w = c.gear.weapon && GEAR[c.gear.weapon.k]; const dur = (ATK_DUR[w ? w.kind : 'fist'] || 0.6) / (1 + (c.stats.agi || 0) * 0.02); if (t - myAtk.t > dur * 0.75) { queuedAtk = false; doAttack(t); } }
-  if (mouseL && !queuedAtk && myAtk && !UI.anyModal() && !S.placing) { const w = c.gear.weapon && GEAR[c.gear.weapon.k]; if (!w || !['rod','bow'].includes(w.kind)) { const dur = (ATK_DUR[w ? w.kind : 'fist'] || 0.6) / (1 + (c.stats.agi || 0) * 0.02); if (t - myAtk.t > dur) doAttack(t); } }
+  if (mouseL && !queuedAtk && myAtk && !UI.anyModal() && !S.placing) { const w = c.gear.weapon && GEAR[c.gear.weapon.k]; if (!w || !['rod'].includes(w.kind)) { const dur = (ATK_DUR[w ? w.kind : 'fist'] || 0.6) / (1 + (c.stats.agi || 0) * 0.02); if (t - myAtk.t > dur) doAttack(t); } }
   sendT -= dt;
   if (sendT <= 0) { sendT = 0.066; net({ type: 'mv', pj: S.tower || S._perchT > performance.now() ? 1 : 0, x: Math.round(me.x * 100) / 100, z: Math.round(me.z * 100) / 100, y: Math.round(me.y * 10) / 10, ry: Math.round(me.ry * 100) / 100, run: me.run, a: speed > 0 ? 1 : 0, jh: Math.round((S.spect || S.tower ? me.y - bodyY(me.x, me.z) : jumpH) * 10) / 10 }); }
 }
@@ -1292,7 +1205,7 @@ function horseObj(key, kind) {
   let h = horses.get(key);
   if (h && h.kind === kind) return h;
   if (h) scene.remove(h.obj);
-  const obj = MD.makeAnimal('horse'); obj.userData.horse = true; obj.userData.riderKey = key; obj.scale.setScalar(1.15);
+  const obj = MD.makeAnimal('horse'); obj.scale.setScalar(1.15);
   const col = D.HORSES[kind] ? D.HORSES[kind].col : 0x7a4a28;
   if (col !== 0x7a4a28) obj.traverse((m) => { if (m.isMesh && m.material && m.material.color && m.material.color.getHex() === 0x7a4a28) { m.material = m.material.clone(); m.material.color.setHex(col); } });
   const back = 1.49; // высота спины модели коня (без масштаба)
@@ -1335,10 +1248,7 @@ let rain = null;
 function ensureMe() {
   const c = S.char; if (!c) return;
   const look = {}; for (const s of ['weapon', 'offhand', 'head', 'body', 'legs']) look[s] = c.gear[s] ? [c.gear[s].k, c.gear[s].q] : null;
-  if(holdE&&keys.KeyE){const n=nodeById.get(holdE.id);if(n?.tool){look.weapon=[n.tool==='pick'?'pick':'axe',0];look.offhand=null;}}
-  if(rangedHold?.kind==='pilum'||myAtk?.kind==='throw'&&performance.now()/1000-myAtk.t<.9){look.weapon=['pilum',0];look.offhand=null;}
   if (c.torch) look.torch = 1;
-  if(c.tunaCarry)look.tuna=c.tunaCarry.kg;
   if (c.carry) look.carry = D.CRATES[c.carry] ? D.CRATES[c.carry].grade : 1;
   const key = lookKey(look) + c.color;
   if (me3 && key === meLook) return;
@@ -1346,8 +1256,6 @@ function ensureMe() {
   me3 = makeHumanFor(c.id, look, c.color); applyLook(me3, look); R.optimizeStatic(me3);
   scene.add(me3); meLook = key;
 }
-const unitRenderer=new UnitRenderer(scene,o=>{const h=makeHumanFor(o.type,null,null,o.def.faction);const g=o.def.gear||{};MD.setGear(h,{weapon:g.w||null,offhand:g.off||null,head:g.head||null,body:g.body||null,legs:null,q:0});R.optimizeStatic(h);return h;},MD.animateHuman);
-let focusNext=0,tagsNext=0;
 function animHuman(obj, dt, t, s) { try { MD.animateHuman(obj, dt, s); } catch (e) { if (!animHuman.warned) { animHuman.warned = true; console.warn(e); } } }
 function loop() {
   requestAnimationFrame(loop);
@@ -1356,8 +1264,7 @@ function loop() {
   ensureMe();
   updateMe(dt);
   updateHold(dt);
-  updateRanged();
-  if(nowMs>=focusNext){focus=findFocus();focusNext=nowMs+80;}
+  focus = findFocus();
   UI.setPrompt(focus && !UI.anyModal() ? focus.text : '');
   const me = S.me;
   // я
@@ -1369,7 +1276,7 @@ function loop() {
     const w = S.char && S.char.gear.weapon ? GEAR[S.char.gear.weapon.k] : null;
     const ak = myAtk && t - myAtk.t < (ATK_DUR[myAtk.kind] || 0.6) ? { kind: myAtk.kind === 'tool' ? 'tool' : myAtk.kind, p: (t - myAtk.t) / (ATK_DUR[myAtk.kind] || 0.6), combo: myAtk.combo } : null;
     const dodge = t - dodgeT < CFG.dodgeTime ? (t - dodgeT) / CFG.dodgeTime : -1;
-    animHuman(me3, dt, t, { t, speed: seatY != null ? 0 : moveSpeed, running: me.run && seatY == null, swim: me.swim && !ship, dodge, attack: rangedHold?{kind:rangedHold.kind==='bow'?'bow':'throw',p:rangedHold.kind==='bow'?Math.min(.54,(t-rangedHold.t)*.54):.35,combo:0}:ak, block: blocking, dead: me.alive ? 0 : Math.min(1, (t - (S.deadAt || t)) / 1), sit: (!!ship && ship.type === 'scapha') || !!S.spect, ride: seatY != null, lanceSpeed:moveSpeed, row: false, fishing: !!fishing, hit: Math.max(0, 1 - (t - myHitT) * 4), carry: !!me3.userData._carry });
+    animHuman(me3, dt, t, { t, speed: seatY != null ? 0 : moveSpeed, running: me.run && seatY == null, swim: me.swim && !ship, dodge, attack: ak, block: blocking, dead: me.alive ? 0 : Math.min(1, (t - (S.deadAt || t)) / 1), sit: (!!ship && (ship.type === 'scapha' || ship.type === 'barca')) || !!S.spect, ride: seatY != null, row: false, fishing: !!fishing, hit: Math.max(0, 1 - (t - myHitT) * 4), carry: !!me3.userData._carry });
     if (!me.alive && !S.deadAt) S.deadAt = t; if (me.alive) S.deadAt = 0;
   }
   // другие игроки
@@ -1378,42 +1285,34 @@ function loop() {
     const px = o.x, pz = o.z;
     o.x += (o.tx - o.x) * k; o.z += (o.tz - o.z) * k; o.ry = lerpAng(o.ry, o.tr, k);
     const sp = Math.hypot(o.x - px, o.z - pz) / Math.max(dt, 1e-3); o.sp += (sp - o.sp) * Math.min(1, dt * 8);
-    o.obj.visible=(o.inst||0)===(S.inst?.id||0)&&Math.hypot(o.x-camera.position.x,o.z-camera.position.z)<Math.max(180,RTS.on?RTS.dist*1.8:180);
-    if(!o.obj.visible){updateHorse('p'+o.id,null);continue;}
     const onShip = o.ship ? ships.get(o.ship) : null;
     const fl = o.fl || 0;
     const inf = S.roster.get(o.id);
     o.jh = (o.jh || 0) + ((o.tjh || 0) - (o.jh || 0)) * Math.min(1, dt * 14);
     const oSeat = updateHorse('p' + o.id, inf && inf.horse, !!(inf && inf.mounted), o.x, o.z, o.ry, o.sp, !!(inf && inf.horse) && !onShip && !o.inst && o.obj.visible && !!(fl & 1), dt, t, o.jh);
     const oT = !onShip && !o.inst ? towerAt(o.x, o.z) : null; o.obj.position.set(o.x, onShip ? 0.9 : o.inst ? (S.inst ? S.inst.y0 : 60) : oSeat != null ? oSeat : oT ? oT.y : bodyY(o.x, o.z) + o.jh, o.z); o.obj.rotation.y = o.ry;
-    const at = o.at ? { kind: o.at[0], p: Math.min(1, o.at[3]?o.at[1]:o.at[1] / (ATK_DUR[o.at[0]] || 0.6) + 0.05), combo: o.at[2] } : null;
-    animHuman(o.obj, dt, t, { t, speed: onShip || oSeat != null ? 0 : o.sp, ride: oSeat != null, lanceSpeed:o.sp, running: !!(fl & 2), swim: !!(fl & 8) && !onShip, dodge: fl & 16 ? ((t * 2.2) % 1) : -1, attack: at && at.p < 1 ? at : null, block: !!(fl & 4), dead: fl & 1 ? 0 : 1, sit: (!!onShip && onShip.type === 'scapha') || (!onShip && (o.jh || 0) > 2.5 && !oT && (fl & 1) && o.sp < 0.3), fishing: !!(fl & 32), hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0, carry: !!o.obj.userData._carry });
+    const at = o.at ? { kind: o.at[0], p: Math.min(1, o.at[1] / (ATK_DUR[o.at[0]] || 0.6) + 0.05), combo: o.at[2] } : null;
+    animHuman(o.obj, dt, t, { t, speed: onShip || oSeat != null ? 0 : o.sp, ride: oSeat != null, running: !!(fl & 2), swim: !!(fl & 8) && !onShip, dodge: fl & 16 ? ((t * 2.2) % 1) : -1, attack: at && at.p < 1 ? at : null, block: !!(fl & 4), dead: fl & 1 ? 0 : 1, sit: (!!onShip && (onShip.type === 'scapha' || onShip.type === 'barca')) || (!onShip && (o.jh || 0) > 2.5 && !oT && (fl & 1) && o.sp < 0.3), fishing: !!(fl & 32), hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0, carry: !!o.obj.userData._carry });
     setHp(o.bar, (o.hpp || 0) / 100); o.bar.visible = o.hpp < 100;
     o.bar.quaternion.copy(camera.quaternion);
     if (o.lbl) o.lbl.visible = true; fitLabel(o.lbl, o.bar, o.obj.position, 90);
   }
   // существа
-  unitRenderer.begin();
   for (const o of mobs.values()) {
-    const pose=sampleMotion(o.history||[],t+(S.motionClock||0));
-    if(pose){o.x=pose.x;o.z=pose.z;o.ry=pose.ry;o.sp+=(pose.speed-o.sp)*Math.min(1,dt*8);}
-    { const th = WG.terrainHeight(o.x, o.z), dk = !S.inst ? WG.deckHeight(o.x, o.z, S.blds) : null; o.obj.position.set(o.x, S.inst ? S.inst.y0 : dk != null ? dk : Math.max(-0.7, th), o.z); } o.obj.rotation.y = o.ry;
+    const k = Math.min(1, dt * 9);
+    const px = o.x, pz = o.z;
+    o.x += (o.tx - o.x) * k; o.z += (o.tz - o.z) * k; o.ry = lerpAng(o.ry, o.tr, k);
+    const sp = Math.hypot(o.x - px, o.z - pz) / Math.max(dt, 1e-3); o.sp += (sp - o.sp) * Math.min(1, dt * 8);
+    { const th = WG.terrainHeight(o.x, o.z), dk = th < -0.5 && !S.inst ? WG.deckHeight(o.x, o.z, null) : null; o.obj.position.set(o.x, S.inst ? S.inst.y0 : dk != null ? dk : Math.max(-0.7, th), o.z); } o.obj.rotation.y = o.ry;
     const dead = o.st === 3 ? Math.min(1, (t - o.deadT) / 1) : 0;
     const wind = o.st === 2 ? Math.min(1, o.wind + (t - S.timeAt) * 1.5) : null;
-    const distance=Math.hypot(o.x-camera.position.x,o.z-camera.position.z);
-    const visible=distance<Math.max(180,RTS.on?RTS.dist*1.8:180);
-    o.obj.visible=visible;
-    if(!visible){if(o.def.mounted)updateHorse('m'+o.id,null);continue;}
     if (o.def.human) {
       const kind = wKind(o.def.gear && o.def.gear.w);
       const atk = o.st === 2 ? { kind: o.def.ranged ? (o.def.gear.w === 'bow' ? 'bow' : 'throw') : kind, p: wind * 0.55, combo: o.id % 3 } : (o.lastWind && t - o.lastWind < 0.4 ? { kind: o.def.ranged ? (o.def.gear.w === 'bow' ? 'bow' : 'throw') : kind, p: 0.55 + (t - o.lastWind) / 0.4 * 0.45, combo: 0 } : null);
       if (o.st === 2) o.lastWind = t;
       const seat = o.def.mounted ? updateHorse('m' + o.id, 'gnedoy', o.st !== 3, o.x, o.z, o.ry, o.sp, o.obj.visible, dt, t) : null;
       if (seat != null) o.obj.position.y = seat;
-      const state={t,speed:o.st===6||seat!=null?0:o.sp,ride:seat!=null,lanceSpeed:o.sp,running:o.sp>5,attack:o.st===6?null:atk,dead,kneel:o.st===6,hit:o.hitT?Math.max(0,1-(t-o.hitT)*4):0};
-      const batched=(o.sq>0||o.gid)&&!dead&&o.st!==6&&distance>32&&mobs.size>=12&&!o.def.boss;
-      o.obj.userData.body.visible=!batched;
-      if(batched)unitRenderer.add(o,state);else animHuman(o.obj,dt,t,state);
+      animHuman(o.obj, dt, t, { t, speed: o.st === 6 || seat != null ? 0 : o.sp, ride: seat != null, running: o.sp > 5, attack: o.st === 6 ? null : atk, dead, kneel: o.st === 6, hit: o.hitT ? Math.max(0, 1 - (t - o.hitT) * 4) : 0 });
     } else {
       if (o.def.critter) { try { o.obj.userData.anim && o.obj.userData.anim(dt, t, o.sp > 0.3); } catch {} if (dead) o.obj.rotation.z = dead * 1.5; }
       else try { MD.animateAnimal(o.obj, dt, { t, speed: o.sp, attack: o.st === 2 ? wind : null, dead, drink: o.st === 5 }); } catch {}
@@ -1422,9 +1321,8 @@ function loop() {
     o.lbl.visible = o.st !== 3 && !(o.sq > 0) && !o.gid; fitLabel(o.lbl, o.bar, o.obj.position, o.def.boss ? 90 : 55);
     if (o.st === 3 && t - o.deadT > 4) o.obj.position.y -= Math.min(1, (t - o.deadT - 4)) * 0.8;
     // свои отряды: кольцо под выбранным отрядом
-    if (o.sq > 0 || o.sq === 'guard') { if (!o.selRing) { o.selRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 20), new THREE.MeshBasicMaterial({ color: 0x7fdf7f, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })); o.selRing.rotation.x = -Math.PI / 2; o.selRing.position.y = 0.08; o.obj.add(o.selRing); } o.selRing.material.color.setHex((S.selectedSquads || [S.selSquad]).includes(o.sq) ? 0xffd24a : 0x7fdf7f); o.selRing.scale.setScalar(RTS.on ? 2.2 : 1); }
+    if (o.sq > 0 || o.sq === 'guard') { if (!o.selRing) { o.selRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.75, 20), new THREE.MeshBasicMaterial({ color: 0x7fdf7f, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })); o.selRing.rotation.x = -Math.PI / 2; o.selRing.position.y = 0.08; o.obj.add(o.selRing); } o.selRing.material.color.setHex(o.sq === S.selSquad ? 0xffd24a : 0x7fdf7f); o.selRing.scale.setScalar(RTS.on ? 2.2 : 1); }
   }
-  unitRenderer.end(dt,t);
   // корабли
   for (const map of [ships, eships]) for (const o of map.values()) {
     // плавное движение: корабль идёт сам по скорости и курсу, а к серверной точке подтягивается мягко (без рывков камеры)
@@ -1435,8 +1333,7 @@ function loop() {
     const ed = Math.hypot(px - o.x, pz - o.z);
     if (ed > 12) { o.x = px; o.z = pz; } else { const kk = Math.min(1, dt * 2.5); o.x += (px - o.x) * kk; o.z += (pz - o.z) * kk; }
     o.obj.position.set(o.x, 0, o.z); o.obj.rotation.y = o.ry;
-    o.obj.visible=!S.inst&&(o.id===S.ship||Math.hypot(o.x-camera.position.x,o.z-camera.position.z)<1400);
-    if(o.obj.visible)try { MD.animateShip(o.obj, t, Math.abs(o.speed)); } catch {}
+    try { MD.animateShip(o.obj, t, Math.abs(o.speed)); } catch {}
     if (o.catT && o.obj.userData.catapultArm) { const k = Math.min(1, (t - o.catT) / 3.5); const u = o.obj.userData; u.catapultArm.rotation.x = (u.catapultFired ?? 0.17) + ((u.catapultRest ?? -1.35) - (u.catapultFired ?? 0.17)) * k; if (k >= 1) o.catT = 0; }
     setHp(o.bar, (o.hpp ?? 100) / 100); o.bar.visible = (o.hpp ?? 100) < 100; o.bar.quaternion.copy(camera.quaternion);
   }
@@ -1470,11 +1367,10 @@ function loop() {
   // удочка: поплавок
   updateBobber(t); animSmoke(t);
   updateLife(dt, t);
-  if(nowMs>=tagsNext){updateSquadTags();tagsNext=nowMs+100;}
+  updateSquadTags();
   updateCull(dt);
   updateEnvironment(dt, t);
   updateCamera(dt, t);
-  updateTactical(); updateLandOverlay(); updateDestination();
   R.updateTerrainLod(camera.position.x, camera.position.z);
   R.updateLights(me.x, me.z, envNight > 0.5 || !!S.inst);
   UI.frame(dt, t, { players, mobs, ships, eships, schools });
@@ -1578,7 +1474,7 @@ function updateSquadTags() {
   }
   // чужие и вражеские отряды (Поле Марса, штурм, отряды других игроков): название, численность и полоска здоровья
   const grp = new Map();
-  for (const o of mobs.values()) { if (!o.gid || o.st === 3 || o.sq > 0) continue; let g = grp.get(o.gid); if (!g) grp.set(o.gid, (g = { x: 0, z: 0, n: 0, hp: 0, name: o.gname, foe: o.foe })); g.x += o.obj.position.x; g.z += o.obj.position.z; g.n++; g.hp += o.hpp || 0; }
+  for (const o of mobs.values()) { if (!o.gid || o.st === 3 || o.sq > 0) continue; let g = grp.get(o.gid); if (!g) grp.set(o.gid, (g = { x: 0, z: 0, n: 0, hp: 0, name: o.gname, foe: D.HOSTILE.has(o.def.faction) || o.def.faction === 'punic' || o.def.faction === 'syr' })); g.x += o.obj.position.x; g.z += o.obj.position.z; g.n++; g.hp += o.hpp || 0; }
   for (const [gid, g] of grp) {
     const key = 'g:' + gid; seen.add(key); const x = g.x / g.n, z = g.z / g.n, txt = `${g.name || 'Отряд'} · ${g.n}`;
     let tg = sqTags.get(key); g.max = Math.max(g.n, (tg && tg.max) || 0);
@@ -1589,102 +1485,33 @@ function updateSquadTags() {
   // знамёна Поля Марса: синее — держит Запад, красное — Восток
   if (warFlags.size && S.world && S.world.war) for (const [zid, f] of warFlags) { const L = S.world.war.lobbies.find((q) => q.state === 'fight' && (q.zone || 0) === zid); const col = !L || !L.cap || L.cap.A === L.cap.B ? 0xc9a227 : L.cap.A > L.cap.B ? 0x3a6ad0 : 0xc0392b; if (f.col !== col) { f.col = col; f.flag.material.color.setHex(col); f.ring.material.color.setHex(col === 0xc9a227 ? 0xffd24a : col); } }
 }
-export const RTS = { on: false, cx: 0, cz: 0, dist: 85, pitch: .78, drag: null, hover: null, preview: null, previewUntil: 0 };
-const selected = () => barSquads().filter(q => (S.selectedSquads || [S.selSquad]).includes(q.id));
-function clearTacticalSelection(){S.selectedSquads=[];S.selSquad=null;RTS.drag=null;RTS.hover=null;RTS.preview=null;ghostPoints.visible=false;UI.refreshSquadSelection();}
-export function chooseSquad(id, additive = false) {
-  if(!barSquads().some(q=>q.id===id))return; RTS.drag=null; RTS.preview=null;ghostPoints.visible=false;
-  const ids = new Set(additive ? S.selectedSquads || [S.selSquad] : []);
-  if (additive && ids.has(id)) ids.delete(id); else ids.add(id);
-  S.selectedSquads = [...ids].filter(Boolean); S.selSquad = S.selectedSquads[0] || null; UI.refreshSquadSelection();
-}
+export const RTS = { on: false, cx: 0, cz: 0, dist: 85 };
 export function toggleRts() {
-  RTS.on = !RTS.on; RTS.drag = null; ghostPoints.visible = false;
-  document.body.classList.toggle('tactical', RTS.on);
-  if (RTS.on) { RTS.cx = S.me.x; RTS.cz = S.me.z; if (document.pointerLockElement) document.exitPointerLock(); UI.addLog('Стратег: ЛКМ — выбрать, Shift+ЛКМ — несколько, рамка ЛКМ — группа. ПКМ по врагу — атака; удерживайте ПКМ по земле, чтобы задать фронт и увидеть места бойцов. WASD — камера, колесо — масштаб, средняя кнопка — поворот. Z — назад.', 'info'); }
+  RTS.on = !RTS.on;
+  if (RTS.on) { RTS.cx = S.me.x; RTS.cz = S.me.z; if (document.pointerLockElement) document.exitPointerLock(); UI.addLog('🗺 Вид сверху: WASD — камера, колесо — высота, ЛКМ по своему воину или значку — выбрать отряд, ПКМ по земле — идти туда, ПКМ по врагу — атаковать, 1–5 — отряд, 0 — отменить все приказы, Z — назад.', 'info'); }
 }
-export const barSquads = () => { const l = S.char?.army?.squads || [], war = !!S.char?.war; return l.filter(q => !!q.war === war); };
-const mySquads = () => barSquads().filter(q => q.live > 0);
-export function selectSquad(i, additive = false) { const q = barSquads()[i]; if (!q) return; chooseSquad(q.id, additive); if (!q.live) net({ type: 'squadOut', id: q.id }); }
-export function squadCmd(mode, pt) {
-  const list = selected(); if (!list.length) return UI.addLog('Выберите отряд на панели войска.', 'warn');
-  for (const q of list) net({ type: 'squadOrder', id: q.id, mode: mode === 'form' ? undefined : mode, form: mode === 'form' ? (q.form === 'line' ? 'loose' : 'line') : undefined, x: pt?.x, z: pt?.z, ry: pt?.ry, columns: pt?.columns });
-}
-function screenPoint(pos) { const p = pos.clone().project(camera); return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2, visible: p.z > -1 && p.z < 1 }; }
-function tacticalPick() {
-  const mouse = S.mouse || { x: innerWidth / 2, y: innerHeight / 2 }; let best = null, bd = 22;
-  for (const o of mobs.values()) {
-    if (o.st === 3 || !o.obj.visible) continue;
-    const p = screenPoint(o.obj.position.clone().add(new THREE.Vector3(0, 1, 0))), d = Math.hypot(p.x - mouse.x, p.y - mouse.y);
-    if (p.visible && d < bd) { bd = d; best = o; }
+export const barSquads = () => { const l = (S.char && S.char.army && S.char.army.squads) || [], war = !!(S.char && S.char.war); return l.filter((q) => !!q.war === war); };
+const mySquads = () => barSquads().filter((q) => q.live > 0);
+export function selectSquad(i) { const l = barSquads(); const q = l[i]; if (!q) return; S.selSquad = q.id; if (!q.live) net({ type: 'squadOut', id: q.id }); UI.addLog(`⚔ Выбран: ${q.name}. N — идти к прицелу, O — за мной, 6 — стоять, 0 — отменить приказы, L — строй, Z — вид сверху (ПКМ — приказ).`, 'info'); }
+export function squadCmd(mode, pt) { const id = S.selSquad || (mySquads()[0] || {}).id; if (!id) return UI.addLog('Нет вызванных отрядов (окно U).', 'warn'); const q = S.char.army.squads.find((x) => x.id === id); if (mode === 'form') return net({ type: 'squadOrder', id, form: q && q.form === 'line' ? 'loose' : 'line' }); net({ type: 'squadOrder', id, mode, x: pt && pt.x, z: pt && pt.z }); }
+function rtsClick(right) {
+  const g = groundPointAtMouse(); if (!g) return;
+  if (right) { // ПКМ по врагу — атаковать, по земле — идти туда
+    let foe = null, fd = 4.5; for (const [id, o] of mobs) { if (o.sq > 0 || o.sq === 'guard' || o.st === 3) continue; const fa = o.def && o.def.faction; if (fa === 'prey' || (fa === 'rome' && !(o.sq < 0))) continue; const d = Math.hypot(o.obj.position.x - g.x, o.obj.position.z - g.z); if (d < fd) { fd = d; foe = id; } }
+    const id = S.selSquad || (mySquads()[0] || {}).id; if (!id) return UI.addLog('Выберите отряд: 1–5 или щелчок по значку.', 'warn');
+    if (foe != null) { net({ type: 'squadOrder', id, mode: 'attack', tgt: foe }); const o = mobs.get(foe); fxRing(o.obj.position.x, o.obj.position.z); UI.addLog('⚔ Отряд атакует!', 'info'); return; }
+    squadCmd('move', g); fxRing(g.x, g.z); return;
   }
-  for (const [id, tag] of sqTags) {
-    const p = screenPoint(tag.g.position), d = Math.hypot(p.x - mouse.x, p.y - mouse.y);
-    if (!p.visible || d > 34) continue;
-    const unit = [...mobs.values()].find(o => o.st !== 3 && (typeof id === 'number' ? o.sq === id : 'g:' + o.gid === id));
-    if (unit && d < bd + 12) { best = unit; bd = d; }
-  }
-  return best;
+  let best = null, bd = 6; for (const o of mobs.values()) { if (!o.sq || o.sq <= 0) continue; const d = Math.hypot(o.obj.position.x - g.x, o.obj.position.z - g.z); if (d < bd) { bd = d; best = o; } }
+  if (best) { S.selSquad = best.sq; const q = S.char.army.squads.find((x) => x.id === best.sq); UI.addLog('⚔ Выбран: ' + (q ? q.name : 'отряд'), 'info'); }
 }
-function tacticalDown(e) {
-  S.mouse = { x: e.clientX, y: e.clientY };
-  if (e.button === 1) { RTS.drag = { button: 1, sx: e.clientX, sy: e.clientY }; return; }
-  if (e.button !== 0 && e.button !== 2) return;
-  RTS.drag = { button: e.button, sx: e.clientX, sy: e.clientY, start: groundPointAtMouse(), target: tacticalPick(), additive: e.shiftKey || e.ctrlKey };
-}
-function tacticalUp(e) {
-  const drag = RTS.drag; if (!drag || drag.button !== e.button) return; RTS.drag = null; selectionBox.style.display = 'none';
-  if (e.button === 1) return;
-  const length = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
-  if (e.button === 0) {
-    if (length > 7) {
-      const ids = new Set(drag.additive ? S.selectedSquads || [] : []);
-      for (const o of mobs.values()) if (o.sq > 0 && o.st !== 3) { const p = screenPoint(o.obj.position); if (p.visible && p.x >= Math.min(drag.sx,e.clientX) && p.x <= Math.max(drag.sx,e.clientX) && p.y >= Math.min(drag.sy,e.clientY) && p.y <= Math.max(drag.sy,e.clientY)) ids.add(o.sq); }
-      S.selectedSquads = [...ids]; S.selSquad = S.selectedSquads[0] || null;
-    } else if (drag.target?.sq > 0) chooseSquad(drag.target.sq, drag.additive);
-    return;
-  }
-  const list = selected().filter(q => q.live); if (!list.length) return;
-  if (drag.target?.foe) { for (const q of list) net({ type: 'squadOrder', id: q.id, mode: 'attack', tgt: drag.target.id }); fxRing(drag.target.x,drag.target.z); return; }
-  const preview = formationPreview(drag); if (!preview || !preview.valid) return UI.addLog('Приказ недоступен: строй должен стоять на суше или настиле.', 'warn');
-  for (const q of preview.orders) net({ type:'squadOrder', id:q.id, mode:'move', x:q.x,z:q.z,ry:q.ry,columns:q.columns });
-  RTS.preview = preview; RTS.previewUntil = performance.now() + 4000;
-}
-function formationPreview(drag) {
-  const end = groundPointAtMouse(); if (!end || !drag.start) return null;
-  const dx=end.x-drag.start.x,dz=end.z-drag.start.z,width=Math.hypot(dx,dz), list=selected().filter(q=>q.live);
-  const ry=width > 3 ? Math.atan2(-dz,dx) : (()=>{const q=list[0], m=[...mobs.values()].find(m=>m.sq===q?.id);return m?Math.atan2(end.x-m.x,end.z-m.z):S.me.ry;})();
-  const columns=width>3?Math.max(2,Math.min(12,Math.round(width/Math.max(1,list.length)/2.2))):6;
-  const cx=width>3?(end.x+drag.start.x)/2:end.x,cz=width>3?(end.z+drag.start.z)/2:end.z;
-  const orders=[],points=[];let valid=true;
-  list.forEach((q,k)=>{const side=(k-(list.length-1)/2)*(Math.min(columns,q.live)*2.2+5), x=cx+Math.cos(ry)*side,z=cz-Math.sin(ry)*side;
-    orders.push({id:q.id,x,z,ry,columns});
-    for(let i=0;i<q.live;i++){const pt=formationWorld(i,q.live,q.form,columns,x,z,ry);const h=WG.terrainHeight(pt.x,pt.z),deck=WG.deckHeight(pt.x,pt.z,S.blds);const collision=collide(pt.x,pt.z);if((h<.2&&deck==null)||Math.hypot(collision.x-pt.x,collision.z-pt.z)>.25)valid=false;points.push({...pt,y:Math.max(h,deck??h)+.22});}
-  });return{orders,points,valid};
-}
-const selectionBox=document.createElement('div');selectionBox.id='tacticalSelection';document.body.appendChild(selectionBox);
-const tacticalCursor=document.createElement('div');tacticalCursor.id='tacticalCursor';document.body.appendChild(tacticalCursor);
-const tacticalHint=document.createElement('div');tacticalHint.id='tacticalHint';document.body.appendChild(tacticalHint);
-const ghostGeo=new THREE.CircleGeometry(.38,10);ghostGeo.rotateX(-Math.PI/2);
-const ghostPoints=new THREE.InstancedMesh(ghostGeo,new THREE.MeshBasicMaterial({color:0x8cff9a,transparent:true,opacity:.85,depthTest:false,depthWrite:false}),512);ghostPoints.frustumCulled=false;ghostPoints.visible=false;ghostPoints.renderOrder=50;scene.add(ghostPoints);
-const ghostMatrix=new THREE.Matrix4();
-function updateTactical() {
-  if(!RTS.on||UI.anyModal()){canvas.style.cursor='';ghostPoints.visible=false;selectionBox.style.display='none';tacticalHint.style.display='none';tacticalCursor.style.display='none';return;}
-  const hover=tacticalPick();RTS.hover=hover;
-  const attack=!!hover?.foe&&selected().length>0; const mouse=S.mouse||{x:0,y:0};Object.assign(tacticalCursor.style,{display:attack?'block':'none',left:(mouse.x+12)+'px',top:(mouse.y+10)+'px'});tacticalCursor.textContent='⚔';canvas.style.cursor=attack?'crosshair':hover?.sq>0?'pointer':'default';
-  tacticalHint.style.display='block';tacticalHint.textContent=attack?'⚔ Атаковать отряд':hover?.sq>0?'Выбрать отряд':'ПКМ: движение · удержание ПКМ: фронт строя';tacticalHint.classList.toggle('attack',attack);
-  if(RTS.drag?.button===0){const d=RTS.drag,m=S.mouse||{x:d.sx,y:d.sy};Object.assign(selectionBox.style,{display:'block',left:Math.min(d.sx,m.x)+'px',top:Math.min(d.sy,m.y)+'px',width:Math.abs(m.x-d.sx)+'px',height:Math.abs(m.y-d.sy)+'px'});}
-  let p=RTS.drag?.button===2&&!RTS.drag.target?.foe?formationPreview(RTS.drag):performance.now()<RTS.previewUntil?RTS.preview:null;
-  ghostPoints.visible=!!p;if(p){ghostPoints.count=Math.min(512,p.points.length);ghostPoints.material.color.setHex(p.valid?0x8cff9a:0xff6050);p.points.slice(0,512).forEach((pt,i)=>{ghostMatrix.makeTranslation(pt.x,pt.y,pt.z);ghostPoints.setMatrixAt(i,ghostMatrix);});ghostPoints.instanceMatrix.needsUpdate=true;}
-}
-
 const ringObj = new THREE.Mesh(new THREE.RingGeometry(1.6, 2.2, 32), new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false })); ringObj.rotation.x = -Math.PI / 2; ringObj.visible = false; scene.add(ringObj);
 let ringT = 0; function fxRing(x, z) { ringObj.position.set(x, WG.terrainHeight(x, z) + 0.3, z); ringObj.visible = true; ringT = performance.now(); }
 function updateCamera(dt, t) {
   if (ringObj.visible && performance.now() - ringT > 1500) ringObj.visible = false;
   if (RTS.on) {
     camTgt.set(RTS.cx, WG.terrainHeight(RTS.cx, RTS.cz) + 1, RTS.cz);
-    camPos.set(RTS.cx + Math.sin(camYaw) * RTS.dist * Math.cos(RTS.pitch), camTgt.y + RTS.dist * Math.sin(RTS.pitch), RTS.cz + Math.cos(camYaw) * RTS.dist * Math.cos(RTS.pitch));
+    camPos.set(RTS.cx + Math.sin(camYaw) * RTS.dist * 0.42, camTgt.y + RTS.dist, RTS.cz + Math.cos(camYaw) * RTS.dist * 0.42);
     camera.position.lerp(camPos, Math.min(1, dt * 6)); camera.lookAt(camTgt);
     R.sky.position.copy(camera.position);
     if (R.water) { R.water.position.x = Math.round(camera.position.x / 50) * 50; R.water.position.z = Math.round(camera.position.z / 50) * 50; }
@@ -1711,46 +1538,19 @@ function updateCamera(dt, t) {
   R.sky.position.copy(camera.position);
   if (R.water) { R.water.position.x = Math.round(camera.position.x / 50) * 50; R.water.position.z = Math.round(camera.position.z / 50) * 50; }
 }
-export function arenaLeave(){if(!S.spect||S.seatingPending)return;S.seatingPending={bid:S.spect.bid,at:performance.now()};net({type:'arenaLeave'});}
 // зритель садится на свободное место трибуны (ярус 3–10), лицом к арене; уходит через ближайший вход
-export function arenaSit(bid){
- const b=S.blds.find(b=>b.id===bid);if(!b||S.ship||S.tower||S.seatingPending)return;
- S.seatingPending={bid,at:performance.now()};
- let angle=Math.random()*Math.PI*2;if(Math.abs(Math.sin(angle))<.25)angle+=.6;
- net({type:'arenaSeat',bid,angle,tier:3+Math.floor(Math.random()*8)});
+export function arenaSit(bid) {
+  const b = S.blds.find((x) => x.id === bid); if (!b || S.ship || S.tower) return;
+  if (S.char.mounted) { net({ type: 'mount' }); S.char.mounted = false; } // спешиваемся сами
+  const cs = Math.cos(b.ry || 0), sn = Math.sin(b.ry || 0), base = WG.bldBase(b, 46);
+  let th = Math.random() * Math.PI * 2; if (Math.abs(Math.sin(th)) < 0.25) th += 0.6;
+  const k = 3 + Math.floor(Math.random() * 8), s0 = (k + 0.5) / 13, a = 25.9 + (41.6 - 25.9) * s0, bb = 17.9 + (32.6 - 17.9) * s0, y = base + 3.6 + (14.2 - 3.6) * (k + 1) / 13;
+  const lx = a * Math.cos(th), lz = bb * Math.sin(th), x = b.x + lx * cs + lz * sn, z = b.z - lx * sn + lz * cs;
+  const gx = Math.cos(th) > 0 ? 49 : -49, ox = b.x + gx * cs, oz = b.z - gx * sn;
+  S.spect = { x, z, y: y + 0.05, ry: Math.atan2(b.x - x, b.z - z), ox, oz };
+  UI.addLog('🪑 Вы на трибуне. E — встать и уйти.', 'info');
 }
-
 export { players, mobs, ships, eships, blds, chestObjs, poiObjs, aimYaw };
 export const getCam = () => ({ yaw: camYaw, pitch: camPitch });
 window.__imp.cam = (y, p, d) => { camYaw = y; camPitch = p; camDist = d; };
 window.__imp.state = () => ({ players, mobs, ships, blds, S });
-
-const landOverlay = new THREE.Group(); scene.add(landOverlay); let landKey = '';
-export function updateLandOverlay() {
-  landOverlay.visible = !S.inst && S.showPlots !== false;
-  if (!S.char || !S.world) return;
-  const key = JSON.stringify(S.world.plots || {}) + S.char.id;
-  if (key === landKey) return; landKey = key;
-  for (const o of [...landOverlay.children]) { landOverlay.remove(o); o.geometry.dispose(); o.material.dispose(); }
-  const own = [], other = [], half = D.CELL / 2;
-  for (const [key, owner] of Object.entries(S.world.plots || {})) {
-    const [cid, i, j] = key.split(':'), C = WG.cityById(cid); if (!C) continue;
-    const [cx, cz] = WG.cellCenter(C, Number(i), Number(j)), points = owner === S.char.id ? own : other, co=Math.cos(C.ry),sn=Math.sin(C.ry);
-    const corners=[[-half,-half],[half,-half],[half,half],[-half,half]];
-    for(let edge=0;edge<4;edge++) for(let part=0;part<4;part++) {
-      const a=corners[edge],b=corners[(edge+1)%4];
-      for(const k of [part/4,(part+1)/4]) { const x=cx+(a[0]+(b[0]-a[0])*k)*co+(a[1]+(b[1]-a[1])*k)*sn,z=cz-(a[0]+(b[0]-a[0])*k)*sn+(a[1]+(b[1]-a[1])*k)*co;points.push(x,WG.terrainHeight(x,z)+.17,z); }
-    }
-  }
-  for(const [points,color] of [[own,0x8ff0a0],[other,0xd7ad73]]) { const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));const lines=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color,transparent:true,opacity:.75,depthWrite:false}));lines.renderOrder=4;landOverlay.add(lines); }
-}
-export function markDestination(x,z,label='Цель') { S.navTarget={x,z,label}; fxRing(x,z); UI.addLog(`${label}: ${Math.round(Math.hypot(x-S.me.x,z-S.me.z))} м. Метка показана в мире.`, 'info'); }
-const destinationLabel=MD.makeLabel('Цель','#ffdf80');destinationLabel.visible=false;scene.add(destinationLabel);
-function updateDestination() { const target=S.navTarget;destinationLabel.visible=!!target&&!S.inst;if(target){destinationLabel.position.set(target.x,WG.terrainHeight(target.x,target.z)+8,target.z);const d=Math.hypot(target.x-S.me.x,target.z-S.me.z);if(d<8){S.navTarget=null;destinationLabel.visible=false;} } }
-
-function syncGuildFootprints() {
-  if(!S.W)return;
-  for(const C of S.W.cities)for(const l of C.layout){if(l.type==='stall')continue;const b=S.blds.find(b=>b.type===l.type&&b.muni&&b.city===C.id);if(b){l.x=b.x;l.z=b.z;l.ry=b.ry;}}
-  for(const C of S.W.cities)WG.extendCivicAvenues(C);
-  WG.setMuniFootprints(S.W.cities);
-}

@@ -1,4 +1,3 @@
-import {announce} from './state.js';
 // Поход на города Сицилии: шпионаж, разграбление пригородов, караваны и торговые корабли снабжения,
 // штурм при нулевой обороне; захваченный город переходит Риму в руинах (здания восстанавливают).
 import { G, D, WG, now, dist, rand, randi, pick, nid, send, log, fx, chronicle, addGear } from './state.js';
@@ -16,7 +15,7 @@ const lvlOf = (id) => D.CAMPAIGN.lvl[id] || 5;
 // весть только тем, кто рядом с городом
 const near = (C, text, kind = 'warn', r = 1300) => { for (const p of nearPlayers(C.x, C.z, r)) send(p, { type: 'log', text, kind }); };
 const syr = (C) => C.owner === 'syr';
-export const need = (C, k) => (k==='plunder'?Math.min(T.plunder.n,C.suburbs.filter(s=>!G.world.pois.find(p=>p.id===s.poi)?.suppressed).length):k === 'fleet' && !C.harbor ? 0 : k === 'caravan' && !C.harbor ? T.caravan.n * 2 : T[k].n);
+export const need = (C, k) => (k === 'fleet' && !C.harbor ? 0 : k === 'caravan' && !C.harbor ? T.caravan.n * 2 : T[k].n);
 const troop = (C, role) => syr(C) ? { inf: 'syr_hoplite', rng: 'syr_archer', vet: 'syr_hoplite', boss: 'syr_strategos' }[role] : { inf: 'punic_inf', rng: 'punic_slinger', vet: 'punic_vet', boss: 'punic_officer' }[role];
 
 // убит воин чужого города (стража, охрана усадеб и обозов): оборона −1
@@ -65,7 +64,7 @@ function spyTick(t) {
 }
 // ---------- Пригороды ----------
 export function plunder(p, poiId) {
-  const q = G.world.pois.find((x) => x.id === poiId && x.type === 'suburb_villa'); if (!q || q.suppressed || dist(p, q) > 14) return;
+  const q = G.world.pois.find((x) => x.id === poiId && x.type === 'suburb_villa'); if (!q || dist(p, q) > 14) return;
   const C = cityW(q.city), st = CS(q.city); if (!st || st.owner === 'rome') return;
   st.burnt = st.burnt || {};
   if (st.burnt[q.id]) return;
@@ -98,7 +97,7 @@ function guardsTick(C, t) {
   // пригородные усадьбы: охрана появляется, когда кто-то подходит
   st.burnt = st.burnt || {};
   for (const s of C.suburbs) {
-    if (st.burnt[s.poi]||G.world.pois.find(p=>p.id===s.poi)?.suppressed) {const old=R.sub[s.poi];if(old)for(const id of old.live)G.mobs.delete(id);continue;}
+    if (st.burnt[s.poi]) continue;
     const r = R.sub[s.poi] || (R.sub[s.poi] = { live: [], at: 0 });
     r.live = alive(r.live);
     const nr = nearPlayers(s.x, s.z, 130).length;
@@ -181,7 +180,7 @@ export function assault(p, cityId) {
   });
   if (atk.length) log(`🛡 Защитники ${C.name} выводят ${atk.length} отряд(а) навстречу вашим.`, 'bad');
   R.assault = { t0: now(), live, boss: boss && boss.id };
-  announce('siege',`⚔ ШТУРМ ${C.name.toUpperCase()}! ${p.char.name} ведёт римлян на стены. Гарнизон: ${n} воинов и ${boss ? boss.def.name : 'военачальник'}.`, 'bad');
+  log(`⚔ ШТУРМ ${C.name.toUpperCase()}! ${p.char.name} ведёт римлян на стены. Гарнизон: ${n} воинов и ${boss ? boss.def.name : 'военачальник'}.`, 'bad');
   chronicle(`Начался штурм города ${C.name}`);
   G.dirtyWorld = true;
 }
@@ -207,7 +206,7 @@ export function capture(C) {
   for (const b of G.W.buildings) if (b.city === C.id && b.muni) { b.enemy = false; b.built = false; b.prog = {}; b.hp = 0; b.ruined = false; b.contrib = {}; n++; }
   const lv = lvlOf(C.id);
   for (const p of nearPlayers(C.x, C.z, C.R + 300)) { p.char.den += 150 + lv * 40; grantXp(p, 400 + lv * 80); grantDig(p, 30 + lv * 4); p.dirtyChar = true; }
-  announce('capture',`🦅 ${C.name} взят! Город переходит под власть Рима. Здания лежат в руинах (${n}) — восстановите их всем миром.`, 'good');
+  log(`🦅 ${C.name} взят! Город переходит под власть Рима. Здания лежат в руинах (${n}) — восстановите их всем миром.`, 'good');
   chronicle(`Рим взял город ${C.name}`);
   G.dirtyBld = true; G.dirtyWorld = true;
   storyCheck();
@@ -218,7 +217,6 @@ export function campaignTick(dt) {
   spyTick(t);
   for (const m of G.mobs.values()) if (m.follow) followTick(m);
   if (acc < 1) return; acc = 0;
-  WG.protectEstates(G.world,G.W.cityState,G.W.buildings);
   for (const C of G.world.cities) {
     const st = CS(C.id); if (!st || st.owner === 'rome') continue;
     guardsTick(C, t); caravanTick(C, t); fleetTick(C, t); assaultTick(C, t);

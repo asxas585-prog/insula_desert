@@ -1,12 +1,12 @@
 {
   "name": "insula",
-  "version": "0.4.4",
-  "description": "Insula Deserta: Империя — кооперативная RPG о Сицилии эпохи Первой Пунической войны",
+  "version": "0.1.0",
+  "description": "Insula Deserta: Империя — кооперативная RPG на Сицилии с постоянным миром",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js --dev",
-    "test": "node tools/run-tests.mjs"
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "ws": "8.22.1"

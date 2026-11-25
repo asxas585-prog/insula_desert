@@ -1057,25 +1057,17 @@ BUILD.horreum_s = (g) => {
 // ======================================================================
 // Структура как у SHIPDEF.scapha — makeShip('barca') строит корпус, банки, 2 пары вёсел и рулевые вёсла.
 // Тунцовую стойку и корзину для сети добавляет addBarcaGear(ship) (или сразу makeBarca()).
-SHIPDEF.barca = { L:12,Bm:3.4,D:1.05,deckY:.62,bul:.65,riseB:.8,riseS:.85,pb:1.7,ps:1.9,hull:0x775037,banks:[[3,0]],oarY0:-.1,seats:4,mast:2.5,mastH:5.5,sail:[3.4,2.6],sailCol:0xd7cba6 };
+SHIPDEF.barca = { L: 9, Bm: 2.3, D: 0.7, deckY: 0.2, bul: 0.5, riseB: 0.35, riseS: 0.45, pb: 1.9, ps: 1.9, hull: 0x7a5034, open: true, banks: [[2, 0]], oarY0: -0.3, seats: 2 };
 export function addBarcaGear(ship) {
   const rock = ship.userData.rock || ship, fy = -0.12;
   const gear = grp(rock, 0, 0, 0); gear.name = 'barcaGear';
-  // Fixed bow platform, pivoting heavy harpoon and twin fish cradles.
-  P(gear,box(2.1,.18,2.1),M(C.woodD),0,.78,3.65);
-  const mt=grp(gear,0,.9,4.05);mt.rotation.y=Math.PI;mt.name='harpoonMount';
-  P(mt,cyl(.25,.35,.85,12),bronzeM(),0,.42,0);
-  P(mt,box(.35,.3,2.5),M(C.woodD),0,1,-.35);
-  P(mt,cyl(.045,.045,3.3,8),ironM(),0,1.2,-.9,HPI);
-  P(mt,cone(.14,.55,4),ironM(),0,1.2,-2.65,-HPI);
-  P(mt,box(1.8,.12,.2),M(C.wood),0,1.05,.1);
-  for(const side of [-1,1]){
-    P(mt,cyl(.25,.25,.4,10),M(C.rope),side*.5,.85,.5,0,0,HPI);
-    const rack=grp(gear,side*1.9,.62,0);rack.name=side<0?'tunaRackPort':'tunaRackStarboard';
-    P(rack,box(.95,.16,3.6),M(C.woodD),0,0,0);
-    for(const z of [-1.3,0,1.3])for(const x of [-.46,.46])P(rack,box(.07,.65,.12),M(C.wood),x,.25,z);
-    for(const z of [-1.2,1.2])P(rack,box(.95,.08,.12),M(C.rope),0,.55,z);
-  }
+  // стойка для тяжёлой тунцовой удочки на корме
+  const mt = grp(gear, 0.35, fy, -3.55);
+  P(mt, box(0.22, 0.85, 0.22), M(C.woodD), 0, 0.42, 0);
+  P(mt, cyl(0.07, 0.07, 0.35, 10, true), MET(C.bronze, 0.4, 0.8), 0, 0.95, 0, -0.75);
+  for (const s of [-1, 1]) P(mt, box(0.05, 0.3, 0.05), MET(C.bronze, 0.4, 0.8), s * 0.09, 0.85, 0.05);
+  const rod = makeBigRod(); rod.position.set(0, 0.85, 0.05); rod.rotation.set(-0.75, 0, 0); mt.add(rod);
+  gear.userData.bigRod = rod;
   // большая корзина с сетью и поплавками
   const nb = grp(gear, 0, fy, 1.3);
   P(nb, cyl(0.5, 0.42, 0.55, 12, true), M(0xa8864c, DS), 0, 0.27, 0);

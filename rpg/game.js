@@ -1,15 +1,6 @@
-import {arenaSeat,arenaLeave} from './seating.js';
-import {announce} from './state.js';
-import {movementAllowance} from './movement.js';
-import {horseMaxSpeed} from '../public/rpg/rules.js';
-import * as TN from './tuna.js';
-import { tradeVisit } from './tutorial.js';
-import { shipLimitOf } from './state.js';
-import * as LG from './logistics.js';
-import { credentials, passwordRecord, verifySecret, allowLogin } from './auth.js';
-import { cityOf, localOffices, hasCityOffice } from './access.js';
+import { warehouseMsg } from './warehouses.js';
 // Insula Deserta: Империя — сервер кооперативной RPG (постоянный мир)
-import { G, D, WG, DEV, now, dist, rand, randi, pick, nid, r1, send, broadcast, log, fx, chronicle, loadAll, saveAll, newChar, derivedOf, rankOf, gearArmor, gearSlow, addRes, takeRes, addGear, charPublic, bagWeight , book, ledgerTick, cityOff, cityNear, officeHolds, officesOf, romanCities } from './state.js';
+import { G, D, WG, DEV, now, dist, rand, randi, pick, nid, r1, send, broadcast, log, fx, chronicle, loadAll, saveAll, newChar, derivedOf, rankOf, gearArmor, gearSlow, addRes, takeRes, addGear, charPublic, bagWeight , book, ledgerTick, cityOff, cityNear, officeHolds, officesOf, romanCities, slaveLimitOf } from './state.js';
 import * as CB from './combat.js';
 import * as EC from './economy.js';
 import * as SO from './society.js';
@@ -37,32 +28,25 @@ function spawnPoint(c) {
 }
 function join(ws, m) {
   const name = String(m.name || 'Гость').trim().slice(0, 18) || 'Гость';
-  const cred = credentials(m, G.chars);
-  const fail = text => { ws.send(JSON.stringify({ type: 'error', text })); return null; };
-  if (!cred || cred.secret.length > 256) return fail('Проверьте код и пароль.');
-  if (!allowLogin('account:' + cred.id)) return fail('Слишком много попыток входа. Подождите минуту.');
-  const id = cred.id;
-  let c = G.chars[id]; const fresh = !c;
-  if (c) {
-    if (!c.auth) return fail('Для старого персонажа нужен новый пароль от администратора. Персонаж и имущество сохранены.');
-    if (!verifySecret(c.auth, cred.secret)) return fail('Неверный код или пароль.');
-  } else {
-    if (cred.named && cred.secret.length < 10) return fail('Для нового кода задайте пароль от 10 символов.');
-    c = G.chars[id] = newChar(id, name, D.COLORS.includes(m.color) ? m.color : pick(D.COLORS));
-    c.auth = passwordRecord(cred.secret);
-  }
-  for (const q of G.players.values()) if (q.char?.id === id) { dropPlayer(q); try { q.ws.close(4001, 'Вход с другого устройства'); } catch {} }
+  const code = /^\d{5}$/.test(String(m.code || '')) ? String(m.code) : null;
+  const token = /^[a-z0-9]{8,32}$/i.test(String(m.token || '')) ? String(m.token) : null;
+  if (!code && !token) return null;
+  const id = code ? 'c' + code : 't' + token;
+  for (const q of G.players.values()) if (q.char && q.char.id === id) { try { q.ws.close(); } catch {} dropPlayer(q); }
+  let c = G.chars[id];
+  const fresh = !c;
+  if (!c) c = G.chars[id] = newChar(id, name, D.COLORS.includes(m.color) ? m.color : pick(D.COLORS));
   if (name !== 'Гость') c.name = name;
   if (D.COLORS.includes(m.color)) c.color = m.color;
   if (!c.gotTorch) { c.items.push({ uid: nid(), k: 'torch', q: 0 }); c.gotTorch = true; }
   if (c.horses) { const pubSt = G.W.buildings.find((b) => b.type === 'stabulum'); for (const h of c.horses) { if (h.sat == null) h.sat = 100; if (!h.stable && c.horseOut !== h.id && pubSt) h.stable = pubSt.id; } }
   if (!c.spec) { c.spec = {}; c.specPts = Math.max(0, c.level - 1); }
-  const p = { id: pidSeq++, ws, char: c, x: 0, z: 0, y: 0, ry: 0, alive: true, hp: 0, st: 0, buffs: {}, inst: null, ship: null, seat: null, block: false, iframe: 0, lastMv: now(), dirtyChar: true, knownMilitaryRank:D.milIdx(c.milPts||0),joined: now() };
-  let pos = (c.x != null && (WG.terrainHeight(c.x, c.z) > 0.2 || WG.deckHeight(c.x,c.z,G.W.buildings)!=null) && Math.abs(c.x) < CFG.world) ? { x: c.x, z: c.z } : spawnPoint(c);
+  const p = { id: pidSeq++, ws, char: c, x: 0, z: 0, y: 0, ry: 0, alive: true, hp: 0, st: 0, buffs: {}, inst: null, ship: null, seat: null, block: false, iframe: 0, lastMv: now(), dirtyChar: true, joined: now() };
+  let pos = (c.x != null && WG.terrainHeight(c.x, c.z) > 0.2 && Math.abs(c.x) < CFG.world) ? { x: c.x, z: c.z } : spawnPoint(c);
   p.x = pos.x; p.z = pos.z;
   const d = derivedOf(c); p.hp = c.hp && c.hp > 0 ? Math.min(c.hp, d.maxHp) : d.maxHp; p.st = d.maxSt;
   G.players.set(p.id, p);
-  send(p, { type: 'welcome', id: p.id, seed: G.W.seed, x: p.x, z: p.z, dev: DEV, fresh, nodes: G.W.nodes, chests: G.W.chests, chestPos: G.W.chestPos || {}, t: now() });
+  send(p, { type: 'welcome', id: p.id, seed: G.W.seed, coastKeep: G.W.coastKeep || [], x: p.x, z: p.z, dev: DEV, fresh, nodes: G.W.nodes, chests: G.W.chests, chestPos: G.W.chestPos || {}, t: now() });
   sendBuildings(p); sendWorld(p); sendRoster();
   log(`${c.name} ${fresh ? 'прибыл(а) в колонию впервые' : 'вернулся(лась) в колонию'}.`, 'info');
   SO.claimStory(p);
@@ -81,14 +65,8 @@ function dropPlayer(p) {
 // ---------- Ввод ----------
 function handle(p, m) {
   const c = p.char;
-  if (!p.alive && !['mv','chat','ping'].includes(m.type)) return;
   switch (m.type) {
     case 'mv': return onMove(p, m);
-    case 'arenaLeave': if(arenaLeave(p))sendRoster();else send(p,{type:'arenaSeatRejected',text:'Вы уже покинули трибуну.'});return;
-    case 'arenaSeat': if(arenaSeat(p,m))sendRoster();else send(p,{type:'arenaSeatRejected',text:'Подойдите к действующей арене, чтобы сесть на трибуну.'});return;
-    case 'arenaDismount': {const b=G.W.buildings.find(b=>b.id===m.bid&&b.type==='amphitheatrum'&&b.built);if(b&&dist(p,b)<100){p.mounted=false;p.dirtyChar=true;sendRoster();}return;}
-    case 'rangedStart': return CB.rangedStart(p,m);
-    case 'rangedCancel': return CB.rangedCancel(p);
     case 'atk': if (!p.ship || true) CB.playerAttack(p, m); return;
     case 'throw': return CB.playerThrow(p, m);
     case 'block': p.block = !!m.on && p.alive && !(p.guardBreak > now()) && !p.ship; return;
@@ -96,16 +74,12 @@ function handle(p, m) {
       const t = now(); if (!p.alive || p.ship || p.st < CFG.stamina.dodge || t < (p.dodgeReady || 0)) return;
       p.st -= CFG.stamina.dodge; p.iframe = t + CFG.iframes + 0.1; p.dodgeReady = t + 0.7; p.dodgeT = t; p.block = false; return;
     }
-    case 'tradeVisit': return tradeVisit(p, m);
-    case 'warehouseMove': case 'autoStore': return LG.warehouseMsg(p, m);
-    case 'gatherPose': return EC.gatherPose(p,m);
-    case 'wreckBoard': if(!EC.boardWreck(p,m.id))send(p,{type:'wreckBoardRejected'});return;
     case 'gather': return EC.gather(p, m.id | 0);
     case 'open': return EC.openChest(p, String(m.id));
     case 'eat': return eat(p, m.res);
     case 'heal': return bandage(p);
     case 'crateCraft': case 'crateTake': case 'crateStore': case 'crateDrop': case 'cratePick': case 'crateLoad': case 'crateUnload': case 'crateSell': return T.crateMsg(p, m);
-    case 'squadRecruit': case 'guardHire': case 'guardToggle': case 'guardFire': case 'guardOrder': case 'squadUp': case 'squadReinforce': case 'squadOut': case 'squadIn': case 'squadOrder': case 'squadDisband': case 'squadHome': AR.armyMsg(p, m); break;
+    case 'squadRecruit': case 'guardHire': case 'guardToggle': case 'guardFire': case 'guardOrder': case 'squadUp': case 'squadOut': case 'squadIn': case 'squadOrder': case 'squadDisband': case 'squadHome': AR.armyMsg(p, m); break;
     case 'squadCancel': AR.cancelOrders(p); break;
     case 'watchBuy': case 'watchUp': AR.watchMsg(p, m); break;
     case 'sciBuy': case 'sciSample': case 'sciCatch': case 'sciStudy': SC.sciMsg(p, m); break;
@@ -113,16 +87,14 @@ function handle(p, m) {
     case 'treasureDig': SC.treasureDig(p, m); break;
     case 'moor': T.moor(p); break;
     case 'boardStart': T.boardStart(p); break;
-    case 'shipBuy': case 'shipForSale': case 'shipRome': case 'shipScrap': T.shipTrade(p, m); break;
+    case 'shipBuy': case 'shipForSale': case 'shipRome': T.shipTrade(p, m); break;
     case 'rankUp': LD.buyRank(p); break;
     case 'tunaPull': EC.tunaPull(p); break;
-    case 'harpoonShot':case 'harpoonReel':case 'harpoonCancel':case 'tunaUnload':case 'tunaLoad':case 'tunaSell':return TN.tunaMsg(p,m);
     case 'sellCatch': EC.sellCatch(p, m.bid); break;
     case 'crateOrder': RT.orderMsg(p, m); break;
     case 'routeNew': case 'routeDel': case 'routeShip': case 'routeWagons': case 'routeGuards': case 'routeCargo': case 'routeToggle': RT.routeMsg(p, m); break;
     case 'permit': LD.buyPermit(p, m); break;
     case 'claim': LD.claimCells(p, m); break;
-    case 'cityRoad': LD.cityRoad(p,m); break;
     case 'release': LD.releaseCells(p, m); break;
     case 'colonyUp': LD.colonyUp(p, m); break;
     case 'spy': CP.spy(p, m.poi); break;
@@ -155,6 +127,7 @@ function handle(p, m) {
     case 'deliver': return EC.deliver(p, m.bid, !!m.store);
     case 'collect': return EC.collect(p, m.bid, !!m.store, typeof m.res === 'string' ? m.res : null);
     case 'repair': return EC.repair(p, m.bid, !!m.store);
+    case 'warehouseRes': case 'warehouseGear': return warehouseMsg(p, m);
     case 'storeTake': return EC.storeTake(p, m.res, m.n);
     case 'donate': {
       const h = EC.builtOf('horreum').find((b) => dist(p, b) < 20) || (!EC.hasBuilt('horreum') && G.world.pois.find((q) => q.type === 'start_camp' && dist(p, q) < 18));
@@ -179,6 +152,7 @@ function handle(p, m) {
     case 'cargo': return EC.cargoMove(p, m.sid, m.res, m.n, m.dir);
     case 'colonyLoad': return EC.colonyLoad(p, m.bid);
     case 'unload': return EC.unloadToStorage(p, m.sid);
+    case 'shipRepair': return EC.repairShip(p, m.sid);
     case 'cast': return EC.cast(p, m.x, m.z);
     case 'reel': return EC.reel(p, !!m.ok);
     case 'uncast': if (p.fishing) { p.fishing = null; send(p, { type: 'fishEnd' }); } return;
@@ -223,7 +197,7 @@ function handle(p, m) {
     case 'gateToggle': { // запереть или открыть ворота города: любое должностное лицо, у ворот
       const C = G.world.cities.find((x) => x.id === m.city); if (!C) return;
       const cs = G.W.cityState && G.W.cityState[C.id]; if (!cs || cs.owner !== 'rome') return;
-      if (!localOffices(p.char, C).length) return send(p, { type: 'log', text: 'Ворота запирают и отпирают только должностные лица.', kind: 'warn' });
+      if (!officeOf(p.char.id)) return send(p, { type: 'log', text: 'Ворота запирают и отпирают только должностные лица.', kind: 'warn' });
       if (!C.gates.some((g) => Math.hypot(g.x - p.x, g.z - p.z) < 18)) return send(p, { type: 'log', text: 'Подойдите к воротам.', kind: 'warn' });
       const st = NAV.gateState(C.id); if (st.hp <= 0) return send(p, { type: 'log', text: 'Ворота проломлены — их чинят, когда враги уйдут.', kind: 'warn' });
       st.closed = !st.closed; G.dirtyWorld = true;
@@ -368,25 +342,18 @@ export function horsesTick() {
   }
 }
 export function horseSpeed(p) { const c = p.char; if (!p.mounted || !c.horseOut) return 1; const h = (c.horses || []).find((x) => x.id === c.horseOut); return h ? D.HORSES[h.kind].speed * ((h.sat ?? 100) < 30 ? 0.75 : 1) : 1; }
-export function onMove(p, m, t = now()) {
+function onMove(p, m) {
   if (!p.alive) return;
-  const dt=Math.max(0,t-(p.lastMv??t));
+  const t = now(), dt = Math.max(0.03, t - p.lastMv); p.lastMv = t;
   p.ry = Number(m.ry) || 0; p.run = !!m.run; p.anim = m.a | 0; p.jh = Math.max(0, Math.min(16, Number(m.jh) || 0)); // до 16 м — зритель на трибуне или лучник на башне
   if (p.ship) return;
   const x = Number(m.x), z = Number(m.z);
   if (!isFinite(x) || !isFinite(z)) return;
-  const h=p.char.horses?.find(h=>h.id===p.char.horseOut),top=p.mounted?horseMaxSpeed(h?.kind,true,(h?.sat??100)<30)*1.1:Math.min(26,CFG.run*derivedOf(p.char).speed*1.3);
-  const d=Math.hypot(x-p.x,z-p.z),limit=top*(p.char.tunaCarry?.55:1);
-  movementAllowance(p,t,limit);p.lastMv=t;
-  const maxD = p.moveCredit + (t - (p.dodgeT || 0) < .6 ? 1.5 : 0);
-  const platform = !!m.pj && !p.mounted && !p.inst && G.W.buildings.some(b => b.type === 'amphitheatrum' && b.built && Math.hypot(b.x - p.x,b.z - p.z) < 100 && Math.hypot(b.x-x,b.z-z)<95 && d<105);
-  if (d > maxD && !platform) { p.moveSpeed=0;p.lanceCharge=0;send(p, { type: 'teleport', x: p.x, z: p.z }); return; } // pj — сел на трибуну или поднялся на башню (место далеко от входа)
+  const d = Math.hypot(x - p.x, z - p.z), maxD = (p.mounted ? 26 : 16) * dt + 2.5 + (t - (p.dodgeT || 0) < 0.6 ? 6 : 0);
+  if (d > maxD && !(m.pj && d < 75 && !p.mounted)) { send(p, { type: 'teleport', x: p.x, z: p.z }); return; } // pj — сел на трибуну или поднялся на башню (место далеко от входа)
   if (p.inst) { const I = G.instances.get(p.inst); if (I && !I.walkable(x, z)) return; }
   else if (Math.abs(x) > CFG.world - 5 || Math.abs(z) > CFG.world - 5) return;
-  p.moveSpeed=dt>0?Math.min(limit,d/dt):0;
-  p.moveCredit = Math.max(0, p.moveCredit - d); p.x = x; p.z = z;
-  const ground = p.inst ? G.instances.get(p.inst)?.y0 || 60 : Math.max(0, WG.deckHeight(x,z,G.W.buildings) ?? WG.terrainHeight(x,z));
-  p.y = ground + Math.max(0, Math.min(16, (Number(m.y) || ground) - ground));
+  p.x = x; p.z = z; p.y = Number(m.y) || 0;
   p.swim = !p.inst && WG.terrainHeight(x, z) < -1.1 && WG.deckHeight(x, z, G.W.buildings) == null && !(p.jh > 0);
   if (p.fishing && Math.hypot(p.x - p.fishing.x, p.z - p.fishing.z) > CFG.fishCastR + 6) { p.fishing = null; send(p, { type: 'fishEnd' }); }
   if (p.mounted && p.swim) { p.mounted = false; sendRoster(); }
@@ -403,10 +370,10 @@ function eat(p, res) {
   if (res === 'wine') p.buffs.wine = now() + 120;
   send(p, { type: 'log', text: `Вы съели: ${RES[res].name}`, kind: 'info' }); p.dirtyChar = true;
 }
-export function bandage(p) {
+function bandage(p) {
   const c = p.char, t = now();
   if (!c.bag.bandage || t < (p.healReady || 0) || !p.alive) return;
-  takeRes(c, 'bandage', 1); p.healReady = t + RES.bandage.cooldown; send(p,{type:'healCooldown',seconds:RES.bandage.cooldown}); p.poison = 0;
+  takeRes(c, 'bandage', 1); p.healReady = t + 2.5; p.poison = 0;
   p.hp = Math.min(derivedOf(c).maxHp, p.hp + RES.bandage.heal + c.level * 2);
   fx({ kind: 'heal', x: p.x, z: p.z, pid: p.id }); p.dirtyChar = true;
 }
@@ -446,18 +413,18 @@ function speech(p, text) {
   broadcast({ type: 'speech', name: c.name, office: off, text: t });
   if (bonus) { c.speechBonus = now(); CB.grantDig(p, 3, 'речь с ростр'); }
 }
-export function cheatCode(p, text) {
+function cheatCode(p, text) {
+  if (process.env.CHEATS === '0') return false;
   const [w, arg] = text.trim().toUpperCase().split(/\s+/), kind = CHEATS[w];
   if (!kind) return false;
-  if(process.env.CHEATS==='0'){send(p,{type:'log',text:'Игровые коды отключены администратором сервера.',kind:'warn'});return true;}
   const c = p.char, say = (t) => send(p, { type: 'log', text: '🔑 ' + t, kind: 'good' });
   if (kind === 'kit') { // по 20 основных ресурсов и 500 денариев — не чаще раза в 10 минут
     const left = Math.ceil((c.kitAt || 0) - now()); if (left > 0) { send(p, { type: 'log', text: `🔑 SUBSIDIUM снова можно через ${Math.floor(left / 60)} мин ${left % 60} с.`, kind: 'warn' }); return true; }
     c.kitAt = now() + 600; c.den += 500; for (const k of ['wood', 'stone', 'plank', 'brick', 'iron', 'clay', 'leather', 'linen', 'wheat', 'bread']) addRes(c, k, 20, true); say('+500 денариев и по 20 брёвен, камня, досок, кирпичей, железа, глины, кожи, льна, пшеницы и хлеба'); }
-  else if (kind === 'money') { const n = Math.max(1, Math.min(100000, Number(arg) || 1000)); c.den += n; say(`+${n} денариев`); }
-  else if (kind === 'res') { const n = Math.max(1, Math.min(500, Number(arg) || 50)); for (const k of ['wood', 'stone', 'plank', 'brick', 'iron', 'clay', 'marble', 'leather', 'linen', 'bread']) addRes(c, k, n, true); say(`+${n} каждого строительного ресурса и хлеба`); }
-  else if (kind === 'fides') { const n = Math.max(1, Math.min(20000, Number(arg) || 500)); CB.grantDig(p, n, 'код',false); say(`+${n} одобрения Рима (звание — взнос в курии)`); }
-  else if (kind === 'gloria') { const n = Math.max(1, Math.min(20000, Number(arg) || 300)); c.milPts = (c.milPts || 0) + n; say(`+${n} военных очков`); }
+  else if (kind === 'money') { const n = Math.min(100000, Number(arg) || 1000); c.den += n; say(`+${n} денариев`); }
+  else if (kind === 'res') { const n = Math.min(500, Number(arg) || 50); for (const k of ['wood', 'stone', 'plank', 'brick', 'iron', 'clay', 'marble', 'leather', 'linen', 'bread']) addRes(c, k, n, true); say(`+${n} каждого строительного ресурса и хлеба`); }
+  else if (kind === 'fides') { const n = Math.min(20000, Number(arg) || 500); CB.grantDig(p, n, 'код'); say(`+${n} одобрения Рима (звание — взнос в курии)`); }
+  else if (kind === 'gloria') { const n = Math.min(20000, Number(arg) || 300); c.milPts = (c.milPts || 0) + n; say(`+${n} военных очков`); }
   else if (kind === 'horse') { c.horses = c.horses || []; const h = { id: nid(), kind: 'albus', name: D.HORSES.albus.name }; c.horses.push(h); c.horseOut = h.id; p.mounted = true; sendRoster(); say('Белый скакун под седлом (V — спешиться).'); }
   else {
     const t = kind === 'trireme' ? 'trireme' : kind === 'penteres' ? 'penteres' : SHIPS[String(arg || '').toLowerCase()] ? String(arg).toLowerCase() : 'scapha';
@@ -468,7 +435,7 @@ export function cheatCode(p, text) {
   }
   p.dirtyChar = true; return true;
 }
-const officeOf = cid => { const c=G.chars[cid]; if(!c) return null; const p=[...G.players.values()].find(p=>p.char?.id===cid); return localOffices(c,p||c)[0]||null; };
+const officeOf = (cid) => officesOf(G.chars[cid])[0] || null;
 function devCommand(p, text) {
   const [cmd, a, b] = text.slice(1).split(/\s+/), c = p.char;
   const tp = (x, z) => { p.x = x; p.z = z; send(p, { type: 'teleport', x, z }); };
@@ -526,23 +493,20 @@ function tick() {
   CB.updateMobs(dt);
   CB.updateProj(dt);
   EC.updateShips(dt);
-  CB.rangedTick(dt);CB.lanceTick(dt);
-  if(tickN%100===0)SO.piratePatrolTick();
   SO.updateEnemyShips(dt);
   T.tradeTick(dt); GL.gladTick(now()); CP.campaignTick(dt); RT.routesTick(dt); AR.armyTick(dt);
-  EC.updateSchools(dt); TN.tunaTick(dt);
-  if(G.dirtyRoster){G.dirtyRoster=false;sendRoster();}
+  EC.updateSchools(dt);
   for (const p of G.players.values()) playerTick(p, dt, t);
   if (tickN % 5 === 0) { EC.fishingTick(); for (const p of G.players.values()) CB.pickupDrops(p); SO.musterTick(); }
   if (tickN % 20 === 0) { // раз в секунду
-    CB.populate(); EC.spawnSchools(); EC.nodesRespawn(); SO.eventsTick(); SO.questBoardTick(); SO.electionTick(); SO.lawTick(); SO.arenaTick(); SO.instancesTick(); CB.syncGarrison();
+    CB.populate(); EC.spawnSchools(); EC.nodesRespawn(); SO.eventsTick(); SO.electionTick(); SO.lawTick(); SO.arenaTick(); SO.instancesTick(); CB.syncGarrison();
     if (tickN % 40 === 0) { EC.towersTick(); ledgerTick(); }
     for (const d of G.drops.values()) if (t > d.until) { G.drops.delete(d.id); }
   }
   if (tickN % 20 === 0) { NAV.gateTick(); WAR.warTick(); }
   if (tickN % 20 === 0) GL.gamesTick();
   if (tickN % 60 === 0) { AR.watchTick(); for (const p of G.players.values()) if (p.char && !p.bot && p.wCity && cityNear(p.x, p.z) !== p.wCity) sendWorld(p); }
-  if (tickN % 1200 === 0) { EC.productionTick(); EC.upkeepTick(); horsesTick(); GL.ludusTick(); EC.marketDrift(); EC.refreshSlaveMarket(); if (W.favor > 40) { W.treasury += Math.round(W.favor / 5); } G.dirtyWorld = true; }
+  if (tickN % 1200 === 0) { EC.productionTick(); EC.upkeepTick(); horsesTick(); GL.ludusTick(); EC.marketDrift(); EC.refreshSlaveMarket(); SO.questBoardTick(); if (W.favor > 40) { W.treasury += Math.round(W.favor / 5); } G.dirtyWorld = true; }
   if (tickN % 12000 === 0) EC.breadTick();
   if (tickN % (CFG.saveEvery * 20) === 0) saveAll();
   if (tickN % 2 === 0) sendState();
@@ -583,11 +547,11 @@ function playerTick(p, dt, t) {
 // ---------- Рассылка ----------
 const NEAR = 230;
 function sendState() {
-  const t = now(), warStatus = G.war?.lobbies?.size ? WAR.warPublic() : null;
+  const t = now();
   const plist = [];
   for (const q of G.players.values()) {
-    const at = q.ranged ? [q.ranged.kind==='bow'?'bow':'throw',q.ranged.kind==='bow'?Math.min(.46,(t-q.ranged.at)*.46):.28,0,1] : q.lastAtk && t - q.lastAtk.t < 1.2 ? [q.lastAtk.kind, r1(t - q.lastAtk.t), q.lastAtk.combo] : null;
-    plist.push([q.id, r1(q.x), r1(q.z), Math.round(q.ry * 100) / 100, (q.alive ? 1 : 0) | (q.run ? 2 : 0) | (q.block ? 4 : 0) | (q.swim ? 8 : 0) | (t - (q.dodgeT || 0) < CFG.dodgeTime ? 16 : 0) | (q.fishing ? 32 : 0) | ((q.anim & 1) ? 64 : 0) | (q.fishing && q.fishing.state === 'bite' ? 128 : 0), Math.round(q.hp / derivedOf(q.char).maxHp * 100), q.ship || 0, q.seat ?? -1, q.inst || 0, at, q.fishing ? [r1(q.fishing.x), r1(q.fishing.z)] : null, q.jh ? r1(q.jh) : 0, q.gathering?.until>t?q.gathering.tool:null]);
+    const at = q.lastAtk && t - q.lastAtk.t < 1.2 ? [q.lastAtk.kind, r1(t - q.lastAtk.t), q.lastAtk.combo] : null;
+    plist.push([q.id, r1(q.x), r1(q.z), Math.round(q.ry * 100) / 100, (q.alive ? 1 : 0) | (q.run ? 2 : 0) | (q.block ? 4 : 0) | (q.swim ? 8 : 0) | (t - (q.dodgeT || 0) < CFG.dodgeTime ? 16 : 0) | (q.fishing ? 32 : 0) | ((q.anim & 1) ? 64 : 0) | (q.fishing && q.fishing.state === 'bite' ? 128 : 0), Math.round(q.hp / derivedOf(q.char).maxHp * 100), q.ship || 0, q.seat ?? -1, q.inst || 0, at, q.fishing ? [r1(q.fishing.x), r1(q.fishing.z)] : null, q.jh ? r1(q.jh) : 0]);
   }
   const ships = G.W.ships.map((s) => [s.id, s.type, r1(s.x), r1(s.z), Math.round(s.ry * 100) / 100, r1(s.speed), Math.round(s.hp / s.maxHp * 100)]);
   const eships = [...G.eships.values()].map((s) => [s.id, s.type, r1(s.x), r1(s.z), Math.round(s.ry * 100) / 100, r1(s.speed), Math.round(s.hp / s.maxHp * 100)]);
@@ -601,7 +565,7 @@ function sendState() {
     for (const m of G.mobs.values()) {
       if (m.inst !== p.inst || Math.abs(m.x - p.x) > NEAR || Math.abs(m.z - p.z) > NEAR) continue;
       const st = m.kneel ? 6 : m.hp <= 0 ? 3 : m.state === 'wind' ? 2 : m.moving === 2 ? 4 : m.moving ? 1 : m.drinking ? 5 : 0;
-      mobs.push([m.id, m.type, Math.round(m.x*100)/100, Math.round(m.z*100)/100, Math.round(m.ry * 100) / 100, Math.round(Math.max(0, m.hp) / m.maxHp * 100), st, m.lvl, st === 2 ? r1((t - m.windStart) / (m.windEnd - m.windStart)) : 0, m.squad ? (m.squad.owner === p.char.id ? m.squad.sq : -1) : 0, m.squad && m.squad.owner !== p.char.id && m.squad.sq !== 'guard' ? 'q' + m.squad.sq : m.grp ? m.grp.id : 0, (m.squad || m.grp) && !(m.squad && m.squad.owner === p.char.id) ? m.gname || '' : 0, m.team ? !!(p.war && p.war.lid === m.war && p.war.team !== m.team) : D.HOSTILE.has(m.faction)]);
+      mobs.push([m.id, m.type, r1(m.x), r1(m.z), Math.round(m.ry * 100) / 100, Math.round(Math.max(0, m.hp) / m.maxHp * 100), st, m.lvl, st === 2 ? r1((t - m.windStart) / (m.windEnd - m.windStart)) : 0, m.squad ? (m.squad.owner === p.char.id ? m.squad.sq : -1) : 0, m.squad && m.squad.owner !== p.char.id && m.squad.sq !== 'guard' ? 'q' + m.squad.sq : m.grp ? m.grp.id : 0, (m.squad || m.grp) && !(m.squad && m.squad.owner === p.char.id) ? m.gname || '' : 0]);
     }
     const proj = [];
     for (const pr of G.proj.values()) if (pr.inst === p.inst && t >= pr.born && Math.abs(pr.x - p.x) < 150 && Math.abs(pr.z - p.z) < 150) proj.push([pr.id, pr.kind, r1(pr.x), r1(pr.y), r1(pr.z), r1(pr.vx), r1(pr.vy), r1(pr.vz)]);
@@ -613,7 +577,7 @@ function sendState() {
     const schools = [];
     if (!p.inst) for (const s of G.schools.values()) if (Math.abs(s.x - p.x) < 320 && Math.abs(s.z - p.z) < 320) schools.push([s.id, r1(s.x), r1(s.z), s.kind]);
     const ar = G.arena ? { mode: G.arena.mode, list: G.arena.mode === 'games' ? G.arena.list.map((g) => ({ key: g.key, name: g.name, owner: g.owner })) : undefined, st: G.arena.state, wave: G.arena.wave, f: [...G.arena.fighters], duel: !!G.arena.duel, names: G.arena.names, ids: G.arena.ids, x: G.arena.x, z: G.arena.z, t: Math.max(0, Math.round(G.arena.t - t)) } : null;
-    send(p, { type: 's', stamp:now(), tuna: TN.tunaState(p), wa: warStatus, bd: T.boardDecks(), rd: raidDots, cv: RT.convoyState(), t: r1(W_time()), me: [Math.round(p.hp), d.maxHp, Math.round(p.st), d.maxSt, Math.round(c.sat), p.alive ? 1 : 0, p.poison > t ? 1 : 0, (p.buffs.bath || 0) > t ? 1 : 0], p: plist, m: mobs, pr: proj, d: drops, sh: ships, es: eships, f: schools, fc, ec, ar, mu: G.muster ? [r1(G.muster.x), r1(G.muster.z), Math.round(G.muster.until - t)] : null });
+    send(p, { type: 's', bd: T.boardDecks(), rd: raidDots, cv: RT.convoyState(), t: r1(W_time()), me: [Math.round(p.hp), d.maxHp, Math.round(p.st), d.maxSt, Math.round(c.sat), p.alive ? 1 : 0, p.poison > t ? 1 : 0, (p.buffs.bath || 0) > t ? 1 : 0], p: plist, m: mobs, pr: proj, d: drops, sh: ships, es: eships, f: schools, fc, ec, ar, mu: G.muster ? [r1(G.muster.x), r1(G.muster.z), Math.round(G.muster.until - t)] : null });
   }
 }
 const W_time = () => G.W.time;
@@ -623,26 +587,26 @@ function sendBuildings(p) {
   if (p.ws && p.ws.readyState === 1) p.ws.send(bldCache);
 }
 function bldsPayload() {
-  return ({ type: 'blds', list: G.W.buildings.map((b) => ({ id: b.id, type: b.type, x: b.x, z: b.z, ry: b.ry, owner: b.owner, ownerName: b.ownerName, built: b.built, prog: b.prog, cost: b.cost, hp: Math.round(b.hp), maxHp: b.maxHp, ruined: b.ruined, store: b.store, level: b.level, island: b.island, workers: G.W.slaves.filter((s) => s.bld === b.id).length, done: b.done, orders: b.orders, crates: b.crates, muni: b.muni ? 1 : 0, cell: b.cell, city: b.city, enemy: b.enemy ? 1 : 0, cls: b.cls, dmul: b.dmul, sale: b.sale || undefined, autoStore: b.autoStore !== false, scope: LG.logisticsScope(b), capacity: LG.storeCapacity(b), housing: D.BUILDINGS[b.type]?.housing || 0, residents: G.W.slaves.filter(s => s.home === b.id).length, crafts: b.crafts, lat: b.lat ? 1 : 0, stock: b.stock, glads: b.type === 'ludus' ? G.W.slaves.filter((x) => x.ludus === b.id).map((x) => ({ id: x.id, name: x.name, owner: x.owner, ownerName: (G.chars[x.owner] || {}).name || '?', glvl: x.glvl || 0, grade: x.grade, trait: x.trait, sale: x.sale || null })) : undefined, rooms: b.type === 'insula' ? EC.insulaRooms(b).map((r) => ({ bot: !!r.bot, name: r.name, left: r.until ? Math.max(0, Math.round(r.until - now())) : null })) : undefined })) });
+  return ({ type: 'blds', list: G.W.buildings.map((b) => ({ id: b.id, type: b.type, x: b.x, z: b.z, ry: b.ry, owner: b.owner, ownerName: b.ownerName, built: b.built, prog: b.prog, cost: b.cost, hp: Math.round(b.hp), maxHp: b.maxHp, ruined: b.ruined, store: b.store, items: b.items || [], level: b.level, island: b.island, workers: G.W.slaves.filter((s) => s.bld === b.id).length, done: b.done, orders: b.orders, crates: b.crates, muni: b.muni ? 1 : 0, city: b.city, enemy: b.enemy ? 1 : 0, cls: b.cls, dmul: b.dmul, sale: b.sale || undefined, crafts: b.crafts, lat: b.lat ? 1 : 0, stock: b.stock, glads: b.type === 'ludus' ? G.W.slaves.filter((x) => x.ludus === b.id).map((x) => ({ id: x.id, name: x.name, owner: x.owner, ownerName: (G.chars[x.owner] || {}).name || '?', glvl: x.glvl || 0, grade: x.grade, trait: x.trait, sale: x.sale || null })) : undefined, rooms: b.type === 'insula' ? EC.insulaRooms(b).map((r) => ({ bot: !!r.bot, name: r.name, left: r.until ? Math.max(0, Math.round(r.until - now())) : null })) : undefined })) });
 }
 function sendWorld(p) {
   const W = G.W, t = now();
-  const cid = cityNear(p.x, p.z), CO = { id: cid, name: (G.world.cities.find((C) => C.id === cid) || {}).name || cid, o: cityOff(cid) }, LV = CO.o.lawVote; if (p.wCity !== cid) p.dirtyChar = true; p.wCity = cid; // должности и законы — того города, где игрок
+  const cid = cityNear(p.x, p.z), CO = { id: cid, name: (G.world.cities.find((C) => C.id === cid) || {}).name || cid, o: cityOff(cid) }, LV = CO.o.lawVote; p.wCity = cid; // должности и законы — того города, где игрок
   send(p, {
-    type: 'world', excludedSuburbs:WG.protectEstates(G.world,W.cityState,W.buildings), war: WAR.warPublic(), gladTop: G.W.slaves.filter((x) => (x.gw || 0) + (x.glvl || 0) > 0).sort((a, b) => ((b.gw || 0) * 3 + (b.glvl || 0)) - ((a.gw || 0) * 3 + (a.glvl || 0))).slice(0, 15).map((x) => ({ name: x.name, owner: (G.chars[x.owner] || {}).name || '?', lvl: x.glvl || 0, w: x.gw || 0 })), horseStables: W.buildings.filter((b) => b.type === 'equile' && b.built && (b.stock || []).some((f) => f.sale || f.rent)).map((b) => ({ id: b.id, x: b.x, z: b.z, owner: b.ownerName, sale: b.stock.filter((f) => f.sale && f.grow >= D.HORSE_ECON.grow).length, rent: b.stock.filter((f) => f.rent && !f.out && f.grow >= D.HORSE_ECON.grow).length })), gamesIn: W.gamesDay != null ? W.gamesDay - W.day : null, gamesLog: W.gamesLog || [], gates: W.gates || {}, watch: Object.fromEntries(Object.entries(W.watch || {}).map(([k, v]) => [k, { n: v.n, lvl: v.lvl, live: (v.live || []).length }])), sci: W.sci || {}, plots: W.plots || {}, plotNames: Object.fromEntries([...new Set(Object.values(W.plots || {}))].map((cid) => [cid, G.chars[cid] ? G.chars[cid].name : '?'])), cityState: CP.cityInfo(), fleetBuilt: W.fleetBuilt || {}, romeSent: W.romeSent || {}, treasury: Math.round(W.treasury), storage: W.storage, city: CO.id, cityName: CO.name, laws: CO.o.laws, offices: CO.o.offices, cityOffices: Object.fromEntries(romanCities().map((C) => [C.id, { name: C.name, offices: cityOff(C.id).offices }])), election: CO.o.election ? { ends: Math.round(CO.o.election.ends - t), offices: Object.fromEntries(Object.entries(CO.o.election.offices).map(([k, o]) => [k, Object.fromEntries(Object.entries(o.cands).map(([cid, cc]) => [cid, { name: cc.name, votes: Object.values(cc.votes).reduce((a, v) => a + v, 0), mine: !!cc.votes[p.char.id] }]))])) } : null,
+    type: 'world', war: WAR.warPublic(), gladTop: G.W.slaves.filter((x) => (x.gw || 0) + (x.glvl || 0) > 0).sort((a, b) => ((b.gw || 0) * 3 + (b.glvl || 0)) - ((a.gw || 0) * 3 + (a.glvl || 0))).slice(0, 15).map((x) => ({ name: x.name, owner: (G.chars[x.owner] || {}).name || '?', lvl: x.glvl || 0, w: x.gw || 0 })), horseStables: W.buildings.filter((b) => b.type === 'equile' && b.built && (b.stock || []).some((f) => f.sale || f.rent)).map((b) => ({ id: b.id, x: b.x, z: b.z, owner: b.ownerName, sale: b.stock.filter((f) => f.sale && f.grow >= D.HORSE_ECON.grow).length, rent: b.stock.filter((f) => f.rent && !f.out && f.grow >= D.HORSE_ECON.grow).length })), gamesIn: W.gamesDay != null ? W.gamesDay - W.day : null, gamesLog: W.gamesLog || [], gates: W.gates || {}, watch: Object.fromEntries(Object.entries(W.watch || {}).map(([k, v]) => [k, { n: v.n, lvl: v.lvl, live: (v.live || []).length }])), sci: W.sci || {}, plots: W.plots || {}, plotNames: Object.fromEntries([...new Set(Object.values(W.plots || {}))].map((cid) => [cid, G.chars[cid] ? G.chars[cid].name : '?'])), cityState: CP.cityInfo(), fleetBuilt: W.fleetBuilt || {}, romeSent: W.romeSent || {}, treasury: Math.round(W.treasury), storage: W.storage, city: CO.id, cityName: CO.name, laws: CO.o.laws, offices: CO.o.offices, cityOffices: Object.fromEntries(romanCities().map((C) => [C.id, { name: C.name, offices: cityOff(C.id).offices }])), election: CO.o.election ? { ends: Math.round(CO.o.election.ends - t), offices: Object.fromEntries(Object.entries(CO.o.election.offices).map(([k, o]) => [k, Object.fromEntries(Object.entries(o.cands).map(([cid, cc]) => [cid, { name: cc.name, votes: Object.values(cc.votes).reduce((a, v) => a + v, 0), mine: !!cc.votes[p.char.id] }]))])) } : null,
     electionIn: Math.max(0, Math.round(W.electionAt - W.time)), questsIn: W.questsAt ? Math.max(0, Math.round((W.questsAt - Date.now()) / 1000)) : null,
     lawVote: LV ? { key: LV.key, opt: LV.opt, by: LV.by, ends: Math.round(LV.ends - t), yes: Object.values(LV.votes).filter((v) => v.yes).reduce((a, v) => a + v.w, 0), no: Object.values(LV.votes).filter((v) => !v.yes).reduce((a, v) => a + v.w, 0), mine: LV.votes[p.char.id] ? (LV.votes[p.char.id].yes ? 1 : -1) : 0 } : null, canLaw: Object.fromEntries(Object.keys(D.LAWS).map((k) => [k, SO.canPropose(p.char, CO.id, k)])),
     story: W.story, flags: W.flags || {}, threat: Math.round(W.threat), favor: Math.round(W.favor), day: W.day, time: Math.round(W.time),
     events: W.events.filter((e) => e.until > t || e.live).map((e) => ({ kind: e.kind, title: e.title, text: e.text, left: Math.round(e.until - t), x: e.x, z: e.z, foe: e.foe, cx: e.cx, cz: e.cz })),
     requests: W.requests.filter((r) => !r.done).map((r) => ({ id: r.id, res: r.res, n: r.n, got: r.got, left: Math.round(r.until - t), den: r.den })),
     quests: W.quests, trophies: W.trophies.slice(0, 10), chronicle: W.chronicle.slice(0, 15), slaveMarket: W.slaveMarket, slaves: W.slaves.filter((s) => s.owner === p.char.id), garrison: W.garrison, arenaRecord: W.arenaRecord, priority: W.priority, market: W.market,
-    ships: W.ships.map((s) => ({ forSale: s.forSale || 0, route: s.route || null, berth: s.berth || null, id: s.id, type: s.type, name: s.name, owner: s.owner, ownerName: s.ownerName, cargo: s.cargo, tunaHold: s.tunaHold || [null,null], hp: Math.round(s.hp), maxHp: s.maxHp, starter: !!s.starter, crates: s.crates || [], up: s.up || {}, berth: s.berth || null, archers: W.slaves.filter((x) => x.ship === s.id).map((x) => x.id), troops: [...G.players.values()].filter((q) => q.ship === s.id && q.char).reduce((a, q) => a + (q.char.squads || []).filter((x) => x.aboard === s.id).reduce((b, x) => b + Math.min(6, (D.SQUADS[x.type] || {}).n || 3), 0), 0) })),
+    ships: W.ships.map((s) => ({ forSale: s.forSale || 0, route: s.route || null, berth: s.berth || null, id: s.id, type: s.type, name: s.name, owner: s.owner, ownerName: s.ownerName, cargo: s.cargo, hp: Math.round(s.hp), maxHp: s.maxHp, starter: !!s.starter, crates: s.crates || [], up: s.up || {}, berth: s.berth || null, archers: W.slaves.filter((x) => x.ship === s.id).map((x) => x.id), troops: [...G.players.values()].filter((q) => q.ship === s.id && q.char).reduce((a, q) => a + (q.char.squads || []).filter((x) => x.aboard === s.id).reduce((b, x) => b + Math.min(6, (D.SQUADS[x.type] || {}).n || 3), 0), 0) })),
     camps: W.camps, online: G.players.size,
   });
 }
 function sendChar(p) {
-  const c = p.char,military=D.milIdx(c.milPts||0);if(p.knownMilitaryRank!=null&&military>p.knownMilitaryRank)announce('title',`⚔ ${c.name} получает военное звание «${D.MIL_RANKS[military].name}»!`);p.knownMilitaryRank=military;
-  send(p, { type: 'char', c: { housing: LG.housingCapacity(c), cityResources: LG.availableResources(c, p), tutorial: c.tradeTutorial || 0, officePoints: c.officePoints || {}, doneQuests: c.doneQuests || [], sci: SC.sciPublic(c), rankEarned: D.rankIdx(c.dig || 0), milPts: c.milPts || 0, army: AR.armyOf(c), routes: RT.routesOf(c.id), routeLimit: RT.routeLimit(c), dests: { sea: RT.destinations('sea').map((d) => [d.id, d.name]), land: RT.destinations('land').map((d) => [d.id, d.name]) }, permits: c.permits || {}, lat: c.lat || null, rentGot: c.rentGot || 0, ledger: c.ledger || {}, warRent: c.warRent || [], warPick: c.warPick || [], lore: c.lore || {}, cellLimit: LD.cellLimit(c), id: c.id, name: c.name, color: c.color, level: c.level, xp: c.xp, need: D.xpNeed(c.level), points: c.points, stats: c.stats, dig: c.dig, rank: rankOf(c), den: Math.round(c.den), bag: c.bag, gear: c.gear, items: c.items, quests: c.quests, scraps: c.scraps || 0, trophies: c.trophies.slice(-20), armor: Math.round(gearArmor(c)), slow: gearSlow(c), bagW: Math.round(bagWeight(c) * 10) / 10, bagMax: derivedOf(c).bag, home: c.home, stats2: c.stats2, instCd: c.instCd, office: localOffices(c, p)[0] || null, offices: localOffices(c, p), allOffices: officesOf(c), shipLimit: shipLimitOf(c), slaveLimit: EC.slaveCapacity(c), offs: officeHolds(c).map((h) => ({ ...h, cityName: (G.world.cities.find((C) => C.id === h.city) || {}).name || h.city })), kills: c.kills, ap: c.ap || 0, tamer: c.tamer || 0, lions: c.lions || [], arenaGear: c.arenaGear || {}, carry: c.carry || null, tunaCarry: c.tunaCarry || null, guildCrates: c.guildCrates || {}, quadScraps: c.quadScraps || 0, sunk: c.sunk || [], spec: c.spec || {}, specPts: c.specPts || 0, torch: !!c.torch, horses: (c.horses || []).map((h) => (h.until ? { ...h, left: Math.max(0, Math.round(h.until - now())) } : h)), horseOut: c.horseOut || null, mounted: !!p.mounted, war: p.war || null, tpLeft: Math.max(0, Math.round((c.tpAt || 0) - now())) } });
+  const c = p.char;
+  send(p, { type: 'char', c: { sci: SC.sciPublic(c), rankEarned: D.rankIdx(c.dig || 0), slaveLimit: slaveLimitOf(c), slaveRank: D.rankIdx(c.dig || 0), milPts: c.milPts || 0, army: AR.armyOf(c), routes: RT.routesOf(c.id), routeLimit: RT.routeLimit(c), dests: { sea: RT.destinations('sea').map((d) => [d.id, d.name]), land: RT.destinations('land').map((d) => [d.id, d.name]) }, permits: c.permits || {}, lat: c.lat || null, rentGot: c.rentGot || 0, ledger: c.ledger || {}, warRent: c.warRent || [], warPick: c.warPick || [], lore: c.lore || {}, cellLimit: LD.cellLimit(c), id: c.id, name: c.name, color: c.color, level: c.level, xp: c.xp, need: D.xpNeed(c.level), points: c.points, stats: c.stats, dig: c.dig, rank: rankOf(c), den: Math.round(c.den), bag: c.bag, gear: c.gear, items: c.items, quests: c.quests, scraps: c.scraps || 0, trophies: c.trophies.slice(-20), armor: Math.round(gearArmor(c)), slow: gearSlow(c), bagW: Math.round(bagWeight(c) * 10) / 10, bagMax: derivedOf(c).bag, home: c.home, stats2: c.stats2, instCd: c.instCd, office: officeOf(c.id), offices: officesOf(c), offs: officeHolds(c).map((h) => ({ ...h, cityName: (G.world.cities.find((C) => C.id === h.city) || {}).name || h.city })), kills: c.kills, ap: c.ap || 0, tamer: c.tamer || 0, lions: c.lions || [], arenaGear: c.arenaGear || {}, carry: c.carry || null, guildCrates: c.guildCrates || {}, quadScraps: c.quadScraps || 0, sunk: c.sunk || [], spec: c.spec || {}, specPts: c.specPts || 0, torch: !!c.torch, horses: (c.horses || []).map((h) => (h.until ? { ...h, left: Math.max(0, Math.round(h.until - now())) } : h)), horseOut: c.horseOut || null, mounted: !!p.mounted, war: p.war || null, tpLeft: Math.max(0, Math.round((c.tpAt || 0) - now())) } });
 }
 function sendRoster() {
   const list = [...G.players.values()].map((q) => { const h = q.char.horseOut && (q.char.horses || []).find((x) => x.id === q.char.horseOut); return { id: q.id, cid: q.char.id, office: officeOf(q.char.id), ...charPublic(q.char), horse: h ? h.kind : null, mounted: !!q.mounted, pvp: !!q.pvp }; });
@@ -663,25 +627,19 @@ function ensureStarterBoat() {
 export function startRpg(wss) {
   loadAll();
   ensureStarterBoat(); setInterval(() => { try { ensureStarterBoat(); } catch {} }, 120000);
-  EC.refreshSlaveMarket(true); SO.questBoardTick(); LG.housingTick();SO.storyCheck();SO.piratePatrolTick();
+  EC.refreshSlaveMarket(true); SO.questBoardTick();
   CB.setCombatHooks({ arenaKnockout: SO.arenaKnockout, leaveShip: (p) => { p.ship = null; p.seat = null; } });
   CB.setShipHit(SO.hitEnemyShip); CB.setKneelFn(GL.tryKneel); SO.setBoutFn(GL.boutTick);
   EC.setShipSunkHook(T.onShipSunk); EC.setBerthFn((type, port) => T.freeBerth(type, port, 200, port.id)); EC.setBerthDeckFn((s) => { const b = T.berthByKey(s.type, s.berth); return b && b.deck; }); CB.setSquadFns(AR.squadSlot, AR.squadKill); SC.setTerrain(WG.terrainHeight); CB.setTreasureFn(SC.giveTreasureMap); T.setTreasureFn(SC.giveTreasureMap); SO.setEnemySunkHook((e, q) => { T.onEnemySunk(e, q); CP.onEnemySunk(e, q); }); CB.setBoardFn(T.boardStrike); T.setTradeHooks({ hitEnemyShip: SO.hitEnemyShip }); EC.setEnemyShipHit(SO.hitEnemyShip); SO.setDmgFn((q, n) => CB.damagePlayer(q, n, null));
   setInterval(() => { try { tick(); } catch (e) { console.error('[RPG] такт:', e); } }, 1000 / CFG.tick);
-  const heartbeat=setInterval(()=>{for(const ws of wss.clients)if(ws.readyState===1)ws.ping(()=>{});},25000);heartbeat.unref();wss.on('close',()=>clearInterval(heartbeat));
-  wss.on('connection', (ws, req) => {
-    let p = null, budget = 0, budgetAt = now(); const ip = req?.socket?.remoteAddress || 'local';
+  wss.on('connection', (ws) => {
+    let p = null;
     ws.on('message', (raw, isBin) => {
       if (isBin) return;
       let m; try { m = JSON.parse(raw); } catch { return; }
-      if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.type !== 'string') return;
-      if (now() - budgetAt > 1) { budget = 0; budgetAt = now(); }
-      if (++budget > 80) return;
-      if (!p) { if (m.type === 'join' && allowLogin('ip:' + ip)) { try { p = join(ws, m); } catch (e) { console.error('[RPG] вход:', e.message); send({ ws }, { type: 'error', text: 'Не удалось войти.' }); } } return; }
-      if (G.players.get(p.id) !== p) return;
+      if (!p) { if (m.type === 'join') p = join(ws, m); return; }
       try { handle(p, m); } catch (e) { console.error('[RPG]', m.type, e); }
     });
-    ws.on('error',error=>{console.warn('[RPG] WebSocket:',error.code||error.message);});
     ws.on('close', () => { if (p) { log(`${p.char.name} покинул(а) колонию.`, 'info'); dropPlayer(p); } });
   });
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { saveAll(); });

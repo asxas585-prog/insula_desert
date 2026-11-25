@@ -1,4 +1,4 @@
-// Insula Deserta: Империя — сервер постоянного мира RPG.
+// Insula Deserta: Империя — HTTP и WebSocket сервер текущей RPG.
 import http from 'http';
 import fs from 'fs';
 import zlib from 'zlib';
@@ -6,10 +6,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import { startRpg, saveAll as rpgSave } from './rpg/game.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const DEV = process.env.DEV === '1' || process.argv.includes('--dev');
 
+// ---------- Статика ----------
+// three.js лежит в public/vendor и public/addons (только нужные файлы), поэтому при сборке
+// на хостинге ставится лишь маленький пакет ws. Файлы отдаются сжатыми (gzip) и кэшируются в памяти.
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8' };
 const fileCache = new Map();
 function handleHttp(req, res) {
@@ -17,8 +21,8 @@ function handleHttp(req, res) {
   try { url = decodeURIComponent(req.url.split('?')[0]); } catch { res.writeHead(400); res.end(); return; }
   // проверка «жив ли сервер» для хостингов
   if (url === '/health' || url === '/healthz') { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('ok'); return; }
-  // Главная страница — RPG «Империя». Классическая игра удалена.
-  const rel = path.normalize(url === '/' ? 'rpg/index.html' : url).replace(/^([/\\])+/, '').replace(/^(\.\.[/\\])+/, '');
+  // Главная и /index.html открывают текущую RPG.
+  const rel = path.normalize(url === '/' || url === '/index.html' ? 'rpg/index.html' : url).replace(/^([/\\])+/, '').replace(/^(\.\.[/\\])+/, '');
   const file = path.join(__dirname, 'public', rel);
   if (!file.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); res.end(); return; }
   const gz = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
@@ -44,11 +48,7 @@ const servers = [];
 function startHttp(port, main) {
   const srv = http.createServer(handleHttp);
   srv.on('upgrade', (req, socket, head) => {
-    const endpoint = (req.url || '').split('?')[0];
-    if (endpoint !== '/rpg' && endpoint !== '/rpg/') {
-      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
-      return;
-    }
+    if ((req.url || '').split('?')[0] !== '/rpg') { socket.destroy(); return; }
     wssRpg.handleUpgrade(req, socket, head, (ws) => wssRpg.emit('connection', ws, req));
   });
   srv.on('error', (e) => {
@@ -56,11 +56,10 @@ function startHttp(port, main) {
     else console.log(`(дополнительный порт ${port} недоступен: ${e.code} — это не страшно)`);
   });
   srv.listen(port, '0.0.0.0', () => console.log(main
-    ? `Insula Deserta: Империя — http://localhost:${port} ${DEV ? '[DEV]' : ''}`
+    ? `Insula Deserta: http://localhost:${port}  ${DEV ? '[DEV]' : ''}`
     : `Также слушаю порт ${port}`));
   servers.push(srv);
 }
-
 
 startRpg(wssRpg);
 startHttp(PORT, true);
