@@ -239,3 +239,41 @@ details.offd .offbody { padding: 4px 10px 10px 22px; font-size: 13px; line-heigh
 #squadBar .sqi .sqb { display: flex; gap: 2px; margin-top: 3px; justify-content: center; }
 #squadBar .sqi .sqb button { flex: 1; font-size: 12px; padding: 1px 0; background: rgba(255,255,255,0.06); border: 1px solid var(--line); border-radius: 4px; color: var(--ink); cursor: pointer; }
 #squadBar .sqi .sqb button.on { background: rgba(255, 210, 74, 0.25); border-color: #ffd24a; }
+
+/* City plots, trade guide and tactical mouse controls. */
+#encBtn, #tradeBtn, #plotsBtn { pointer-events:auto; margin-top:6px; }
+#tacticalSelection { display:none; position:fixed; z-index:22; border:1px solid #e8d478; background:#b9cf6330; pointer-events:none; }
+#tacticalHint { display:none; position:fixed; left:50%; top:62px; transform:translateX(-50%); z-index:18; padding:7px 14px; border:1px solid #bdaf76; border-radius:5px; background:#171c20df; color:#eee4c3; pointer-events:none; }
+#tacticalHint.attack { color:#ffb898; border-color:#ff704e; }
+body.tactical #cross { display:none; }
+body.tactical #squadBar { bottom:24px; max-width:95vw; flex-wrap:wrap; justify-content:center; }
+body.tactical #actionBar { display:none; }
+body.tactical #keysHint { bottom:162px; }
+body.tactical .sqi { min-width:105px; background:linear-gradient(#383627ef,#1c2223f5); }
+.sqi .details { font-size:10px; color:#d8d4c3; margin:3px; }
+.sqi .hb { height:7px; }
+.warehouse-cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.trade-step { padding:9px; margin:5px 0; border-left:3px solid #615b46; }
+.trade-step.current { border-color:#edca75; background:#a4841720; }
+
+#hudTL { padding-top:0; }
+#hudTL .bar.xp { margin-bottom:32px; }
+#rateBtn, #tpBtn { margin-top:6px; }
+#denarii { top:112px; }
+#keysHint { bottom:5px; }
+body.tactical #keysHint { bottom:192px; }
+#squadBar .sqi .hb { height:7px; }
+
+#tacticalCursor { position:fixed;display:none;z-index:40;pointer-events:none;color:#ff7653;font-size:30px;text-shadow:0 2px 3px #000,0 0 8px #fa4f25; }
+
+body.tactical #log { bottom:200px; max-height:110px; width:360px; }
+
+body.tactical #squadBar { width:max-content; max-width:calc(100vw - 28px); flex-wrap:nowrap; overflow-x:auto; justify-content:flex-start; }
+body.tactical #squadBar .sqi { flex:0 0 136px; }
+
+/* Money participates in HUD layout instead of overlapping action buttons. */
+#hudTL #denarii { position:static; margin:6px 0 8px; min-height:20px; line-height:20px; }
+#hudTL .bar.xp { margin-bottom:6px; }
+
+#cross.ranged{margin:0;width:var(--spread);height:var(--spread);border:2px solid #f5e3ae;border-radius:50%;background:transparent;transform:translate(-50%,-50%);box-shadow:0 0 2px #000;}
+#cross.ranged:before{content:'';position:absolute;left:0;bottom:-9px;width:var(--draw);height:3px;background:#dfc267;}

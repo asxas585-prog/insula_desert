@@ -1,5 +1,8 @@
+import {announce} from './state.js';
+import {overlaps} from '../public/rpg/footprints.js';
+import { hasCityOffice, cityOf, localOffices } from './access.js';
 // Земля: разрешения Эдила на клетки в районах городов, разметка своих клеток, латифундии, колонии с промыслами
-import { G, D, WG, now, dist, send, log, chronicle, hasAll, payAll, rankOf, rankEarned, hasOffice, officesOf, book } from './state.js';
+import { G, D, WG, now, dist, send, log, nid, chronicle, hasAll, payAll, rankOf, rankEarned, hasOffice, officesOf, book } from './state.js';
 
 const { BUILDINGS, DISTRICTS, CELL, RANKS, LATIFUNDIUM } = D;
 const say = (p, text, kind = 'warn') => send(p, { type: 'log', text, kind });
@@ -9,8 +12,8 @@ const roman = (cityId) => G.W.cityState && G.W.cityState[cityId] && G.W.cityStat
 export const myCells = (cid) => Object.values(plots()).filter((o) => o === cid).length;
 const permitsOf = (c) => (c.permits = c.permits || {});
 const permitTotal = (c) => Object.values(permitsOf(c)).reduce((a, n) => a + n, 0);
-export const cellLimit = (c) => RANKS[rankOf(c)].cells + (officesOf(c).length ? 40 : 0);
-const aedileDisc = (p) => (hasOffice(p.char, 'aedilis') ? 0.8 : 1);
+export const cellLimit = (c) => RANKS[rankOf(c)].cells + (localOffices(c, [...G.players.values()].find(p=>p.char?.id===c.id) || c).length ? 40 : 0);
+const aedileDisc = (p) => (hasCityOffice(p.char, 'aedilis', cityOf(p)) ? 0.8 : 1);
 
 // разрешение Эдила: n клеток в районе города (в курии)
 export function buyPermit(p, m) {
@@ -111,9 +114,8 @@ export function landCheck(p, type, x, z, ry) {
   }
   // поворот — по улицам города, шагом 90°
   const q = Math.round((ry - C.ry) / (Math.PI / 2)) * (Math.PI / 2);
-  // свои здания на клетках не должны пересекаться блоками
-  for (const b of G.W.buildings) { const k = b.blk; if (!k || k.city !== C.id || b.id === p._movingId) continue; if (bs.i0 < k.i0 + k.n && bs.i0 + n > k.i0 && bs.j0 < k.j0 + k.n && bs.j0 + n > k.j0) return { err: 'На этих клетках уже стоит ' + BUILDINGS[b.type].name };
-  }
+  // Ownership is checked above; old oversized reservation blocks must not hide usable owned land.
+  for(const b of G.W.buildings){if(b.id===p._movingId)continue;if(overlaps({type,x:bs.x,z:bs.z,ry:C.ry+q},def,b,BUILDINGS[b.type]))return{err:'Мешает постройка: '+BUILDINGS[b.type].name};}
   return { x: bs.x, z: bs.z, ry: C.ry + q, dmul: DISTRICTS[worst].mul, city: C.id, district: worst, cells: true, blk: { city: C.id, i0: bs.i0, j0: bs.j0, n } };
 }
 export function onPlaced(p, b, chk) {
@@ -153,6 +155,21 @@ export function buyRank(p) {
   if (rankEarned(c) <= cur) return say(p, `Рим ещё не одобрил вас для звания «${next.name}»: нужно ${next.dig} очков одобрения (у вас ${c.dig || 0}).`);
   if (c.den < next.fee) return say(p, `Взнос за звание «${next.name}» — ${next.fee} денариев.`);
   c.den -= next.fee; G.W.treasury += next.fee; c.rankBought = cur + 1;
-  log(`🏛 ${c.name} внёс(ла) взнос в Курии и получает звание «${next.name}»!`, 'good'); chronicle(`${c.name} получил(а) звание «${next.name}»`);
+  announce('title',`🏛 ${c.name} внёс(ла) взнос в Курии и получает звание «${next.name}»!`, 'good'); chronicle(`${c.name} получил(а) звание «${next.name}»`);
   p.dirtyChar = true; G.dirtyWorld = true;
+}
+
+// One publicly owned 4×4 m cell; only the serving aedile of this city.
+export function cityRoad(p,m){
+ const C=WG.cityById(m.city);if(!C||!p.alive||p.inst||!roman(C.id))return;
+ if(!hasCityOffice(p.char,'aedilis',C.id))return say(p,'Прокладывать улицы может только эдил этого города.');
+ const i=m.i|0,j=m.j|0,[x,z]=WG.cellCenter(C,i,j),[u,v]=WG.cityLocal(C,x,z);
+ if(dist(p,{x,z})>90)return say(p,'Прокладывайте улицу рядом с собой.');
+ if(Math.hypot(u,v)>C.R-9||Math.abs(u)<6.5||Math.abs(v)<6.5)return say(p,'Главные дороги и стены менять нельзя.');
+ if(!WG.cityRoadAllowed(C,i,j,G.W.buildings,plots()))return say(p,'Нужна свободная городская клетка рядом с существующей улицей, без участков и зданий.');
+ const cost=BUILDINGS.via_cell.cost;
+ if(!hasAll(p.char,cost))return say(p,'Нужен камень: '+cost.stone);
+ payAll(p.char,cost);G.W.buildings.push({id:nid(),type:'via_cell',x,z,ry:C.ry,city:C.id,cell:{i,j},owner:null,built:true,hp:200,maxHp:200,store:{},cost:{...cost},prog:{...cost},level:1});
+ WG.setCityRoadCells(G.W.buildings);G.dirtyBld=G.dirtyWorld=true;p.dirtyChar=true;
+ say(p,'Улица проложена: одна клетка 4×4 м.','good');
 }

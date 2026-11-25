@@ -1,9 +1,11 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { G, D, WG, newChar, slaveLimitOf, ensureCities, loadAll } from '../rpg/state.js';
 import { planCrate, applyCratePlan } from '../public/rpg/crates.js';
 import { cityWarehouses, warehouseMsg } from '../rpg/warehouses.js';
 import * as T from '../rpg/trade.js';
+import { slaveCapacity } from '../rpg/economy.js';
 import * as SO from '../rpg/society.js';
 import * as GL from '../rpg/glad.js';
 import * as CB from '../rpg/combat.js';
@@ -14,8 +16,9 @@ import { inHarborZone, pirateWater } from '../rpg/harbors.js';
 import { pairedArenaTarget } from '../rpg/arena-pairs.js';
 const passed=[];
 function ok(name,fn){fn();passed.push(name);}
-function reset(){G.players.clear();G.mobs.clear();G.proj.clear();G.eships.clear();G.chars={};G.arena=null;G.W={buildings:[],ships:[],slaves:[],offices:{},laws:{},cityOff:{},cityState:{},events:[],day:1,time:0,treasury:100,flags:{},trophies:[],chronicle:[],camps:{},nodes:{}};G.world={cities:[],nodes:[],pois:[],dens:[],camps:[]};}
+function reset(){G.players.clear();G.drops.clear();G.mobs.clear();G.proj.clear();G.eships.clear();G.chars={};G.arena=null;G.W={buildings:[],ships:[],slaves:[],offices:{},laws:{},cityOff:{},cityState:{},events:[],day:1,time:0,treasury:100,flags:{},trophies:[],chronicle:[],camps:{},nodes:{}};G.world={cities:[],nodes:[],pois:[],dens:[],camps:[]};}
 function player(){const c=newChar('audit','Test',D.COLORS[0]);c.level=12;c.den=10000;c.bag={};c.items=[];G.chars[c.id]=c;const messages=[];const p={id:1,char:c,x:0,z:0,hp:100,st:100,alive:true,buffs:{},ws:{readyState:1,send:s=>messages.push(JSON.parse(s))}};G.players.set(1,p);return {c,p,messages};}
+test('requested gameplay changes remain compatible with current main',()=>{
 reset();
 ok('Tier 1: any crop and mixed crops',()=>{assert(planCrate('crate1',[{plank:1,olives:10}]).ok);assert(planCrate('crate1',[{plank:1,wheat:8,grapes:4}]).ok);assert(!planCrate('crate1',[{plank:1,iron:1000}]).ok);});
 ok('Tier 2: products; raw crops excluded',()=>{assert(planCrate('crate2',[{plank:2,oil:8}]).ok);assert(!planCrate('crate2',[{plank:2,wheat:100}]).ok);});
@@ -34,7 +37,7 @@ reset();G.world=WG.generateWorld(123456789);G.W.buildings=[{id:50,type:'portus',
 ok('Pirate: spawn and pursuit cannot enter harbor safety radius',()=>{const e=SO.spawnEnemyShip('pirate_ship',-2100,-1700,{mode:'hunt'});assert(e);assert(pirateWater(e.x,e.z,e.def.len));G.W.ships=[{id:60,type:'corbita',x:-2100,z:-1700,hp:450,owner:'test'}];e.prey=60;e.ry=Math.atan2(-2100-e.x,-1700-e.z);e.speed=10;for(let i=0;i<300;i++){SO.updateEnemyShips(0.05);assert(!inHarborZone(e.x,e.z,e.def.len/2+4));}assert.equal(G.W.ships[0].hp,450);});
 ok('Coastal relief: rock escarpments exist, city centers remain unchanged',()=>{let raised=0;for(let x=-1400;x<1400;x+=20)for(let z=-800;z<1100;z+=20){const h=WG.terrainHeight(x,z);if(WG.coastalLift(x,z,h)>8)raised++;}assert(raised>10);for(const city of G.world.cities)assert.equal(WG.coastalLift(city.x,city.z,3),0);});
 reset();({p,c}=player());
-ok('Workers: early ranks doubled, Eques limit never falls back to two',()=>{assert.deepEqual(D.RANKS.map(r=>r.slaves),[4,8,12,12,12,15]);c.dig=450;c.rankBought=0;assert.equal(slaveLimitOf(c),12);c.rankBought=3;assert.equal(slaveLimitOf(c),12);c.lat={};assert.equal(slaveLimitOf(c),18);});
+ok('Workers: early ranks doubled, Eques limit never falls back to two',()=>{assert.deepEqual(D.RANKS.map(r=>r.slaves),[4,8,12,12,12,15]);c.dig=450;c.rankBought=0;assert.equal(slaveLimitOf(c),12);assert.equal(slaveCapacity(c),12);c.rankBought=3;assert.equal(slaveLimitOf(c),12);c.lat={};assert.equal(slaveLimitOf(c),18);});
 G.world=WG.generateWorld(123456789);
 ok('Tyndaris: arena and theater removed; old saved arena purged',()=>{const C=G.world.cities.find(c=>c.id==='tyndaris');assert(!C.layout.some(l=>['theatrum','amphitheatrum'].includes(l.type)));G.W.buildings=[{id:999,type:'amphitheatrum',x:C.x+100,z:C.z,city:'tyndaris',built:true}];ensureCities(G.W);assert(!G.W.buildings.some(b=>b.id===999));assert(G.W.buildings.some(b=>b.type==='amphitheatrum'&&b.city==='messana'));});
 reset();({p,c}=player());G.W.buildings=[{id:1,type:'amphitheatrum',built:true,x:0,z:0,ry:0}];
@@ -42,7 +45,7 @@ ok('Personal arena: first wave has at least four participants and NPC duels',()=
 reset();({p,c}=player());c.bag={};G.W.buildings=[{id:1,type:'statio',owner:c.id,built:true,x:0,z:0,store:{plank:1,olives:10},orders:{crate1:1}}];
 ok('Automatic trading post uses the same flexible recipes',()=>{RT.routesTick(60);assert.equal(G.W.buildings[0].crates.crate1,1);assert.equal(G.W.buildings[0].store.olives,0);});
 reset();({p,c}=player());c.squads=[{id:900,type:'inf',name:'Test',lvl:1,up:{arm:5,wpn:5,drill:5},live:[]}];G.war={lobbies:new Map()};G.world.war={house:{x:0,z:0},fields:[{name:'Test',x:0,z:100,r:200,a:{x:-80,z:100},b:{x:80,z:100}}]};
-ok('Field of Mars: mirror bonuses equal; duplicate squad selection rejected',()=>{WAR.warMsg(p,{type:'warPick',ids:[900,900,900,900]});assert.equal(c.warPick.length,1);WAR.warMsg(p,{type:'warCreate',mode:'pvb'});const a=[...G.mobs.values()].filter(m=>m.team==='A'),b=[...G.mobs.values()].filter(m=>m.team==='B');assert.equal(a.length,b.length);for(const k of ['maxHp','dmg','armor','speed'])assert.equal(a[0][k],b[0][k]);assert.equal(a[0].def.speed,b[0].def.speed);});
+ok('Field of Mars: shared bonuses and weaker bot multipliers; duplicate selection rejected',()=>{WAR.warMsg(p,{type:'warPick',ids:[900,900,900,900]});assert.equal(c.warPick.length,1);WAR.warMsg(p,{type:'warCreate',mode:'pvb'});const a=[...G.mobs.values()].filter(m=>m.team==='A'),b=[...G.mobs.values()].filter(m=>m.team==='B');assert.equal(a.length,b.length);assert.equal(b[0].maxHp,Math.round(a[0].maxHp*D.WAR.botScale.hp)); assert.equal(b[0].dmg,a[0].dmg*D.WAR.botScale.damage); assert.equal(b[0].armor,a[0].armor*D.WAR.botScale.armor); assert.equal(a[0].speed,b[0].speed);assert.equal(a[0].def.speed,b[0].def.speed);});
 reset();loadAll();({p,c}=player());
 ok('Three training targets are placed near the real Roman arsenal',()=>{const arsenal=G.W.buildings.find(b=>b.type==='armamentarium'&&b.built&&!b.enemy);assert(arsenal);p.x=arsenal.x;p.z=arsenal.z;NAV.navTick(Date.now()/1000);CB.populate();const targets=[...G.mobs.values()].filter(m=>m.def.training&&m.src?.arsenal===arsenal.id);assert.equal(targets.length,3);for(const m of targets)assert(Math.hypot(m.x-arsenal.x,m.z-arsenal.z)<=31);});
-console.log(JSON.stringify({status:'PASS',checks:passed},null,2));
+});

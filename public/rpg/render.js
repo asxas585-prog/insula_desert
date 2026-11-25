@@ -1,5 +1,7 @@
 // Рендер: three.js, постобработка, небо, свет, земля архипелага, вода, склейка статики
 import * as THREE from 'three';
+import {updateVisibleMatrices} from './transforms.js';
+export {updateVisibleMatrices} from './transforms.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -61,7 +63,7 @@ scene.fog = new THREE.Fog(0xcfe0ea, 220, 1500);
 export const GFX = { mode: 'auto', level: 2, names: ['экономная', 'средняя', 'высокая'] };
 export const terrainDetail = { value: 1 };
 export function applyGfx(level) {
-  GFX.level = level;
+  GFX.level = level; renderer.shadowMap.enabled=level>0;
   const pr = level === 2 ? Math.min(1.5, devicePixelRatio) : level === 1 ? Math.min(1, devicePixelRatio) : Math.min(0.8, devicePixelRatio);
   renderer.setPixelRatio(pr); composer.setPixelRatio(pr);
   renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
@@ -191,7 +193,7 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); 
         float camD = length(vTW - cameraPosition);
         float big = vn(vTW.xz * 0.035) * 0.6 + vn(vTW.xz * 0.11) * 0.4;
         float fine = vn(vTW.xz * 1.9) * 0.55 + vn(vTW.xz * 5.3) * 0.45;
-        float near = smoothstep(80.0, 6.0, camD) * uDetail;
+        float near = (1.0 - smoothstep(6.0, 80.0, camD)) * uDetail;
         vec3 base = diffuseColor.rgb;
         float green = smoothstep(0.02, 0.12, base.g - base.r * 0.85);
         diffuseColor.rgb *= 0.9 + 0.2 * big;
@@ -201,9 +203,9 @@ float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); 
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.78 + 0.45 * blade), green * near * 0.8);
         // слои камня
         float lum = dot(base, vec3(0.299, 0.587, 0.114));
-        float rocky = max(vRockSlope, (1.0 - green) * smoothstep(0.38, 0.3, lum)) * step(0.5, vTW.y);
+        float rocky = max(vRockSlope, (1.0 - green) * (1.0 - smoothstep(0.3, 0.38, lum))) * step(0.5, vTW.y);
         diffuseColor.rgb *= mix(1.0, 0.86 + 0.24 * (0.5 + 0.5 * sin(vTW.y * 2.2 + vn(vTW.xz * 0.2) * 3.0)), rocky * uDetail);
-        diffuseColor.rgb *= mix(1.0, 0.8, smoothstep(0.55, 0.05, vTW.y) * step(-0.7, vTW.y));
+        diffuseColor.rgb *= mix(1.0, 0.8, (1.0 - smoothstep(0.05, 0.55, vTW.y)) * step(-0.7, vTW.y));
       }`);
 };
 export const chunks = [];
@@ -316,16 +318,20 @@ const BLOCKS = new Map();
 // уровни: 0 — 1 м (рядом), 1 — 2 м, 2 — 4 м, 3 — 8 м (всегда есть); дальше тумана куски не рисуются
 const LOD_STEP = [1, 2, 4, 8], LOD_NEAR = [110, 250, 560], LOD_KEEP = [260, 420, 900];
 let lodBuilds = 0;
+let lodNext=0,lodX=Infinity,lodZ=Infinity,lodPending=true,lodFar=0;
 export function updateTerrainLod(cx, cz) {
-  lodBuilds = 0;
+  const now=performance.now();
   const far = scene.fog ? scene.fog.far + 120 : 1700;
+  if(now<lodNext || (!lodPending && Math.hypot(cx-lodX,cz-lodZ)<12 && Math.abs(far-lodFar)<16))return;
+  lodNext=now+100;lodX=cx;lodZ=cz;lodFar=far;lodPending=false;
+  lodBuilds = 0;
   for (const c of chunks) {
     const d = Math.hypot(c.x - cx, c.z - cz);
     let want = d < LOD_NEAR[0] && c.max > -3 ? 0 : d < LOD_NEAR[1] ? 1 : d < LOD_NEAR[2] ? 2 : 3;
     if (c.max < -2 && want < 3) want = Math.max(want, 2); // морское дно — грубо
-    // нужного уровня ещё нет — строим понемногу (не больше 2 кусков за раз), пока показываем более грубый
+    // нужного уровня ещё нет — строим понемногу (не больше одного куска за обновление), пока показываем более грубый
     while (want < 3 && !c.lv[want]) {
-      if (lodBuilds < 2) { lodBuilds++; c.lv[want] = mkChunkMesh(chunkGeo(c.x0, c.z0, LOD_STEP[want])); c.lv[want].visible = false; c.group.add(c.lv[want]); break; }
+      lodPending=true; if (lodBuilds < 1) { lodBuilds++; c.lv[want] = mkChunkMesh(chunkGeo(c.x0, c.z0, LOD_STEP[want])); c.lv[want].visible = false; c.group.add(c.lv[want]); break; }
       want++;
     }
     for (let i = 0; i < 3; i++) if (c.lv[i] && d > LOD_KEEP[i]) { c.group.remove(c.lv[i]); c.lv[i].geometry.dispose(); c.lv[i] = null; if (c.cur === i) c.cur = -1; }
@@ -436,7 +442,7 @@ const _bm = new THREE.Matrix4();
 let groundAO = false;
 function prepGeo(c, toAnchor, withColor, withUv) {
   let g = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
-  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && !(withUv && k === 'uv')) g.deleteAttribute(k);
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && !(c.material.vertexColors && k === 'color') && !(withUv && k === 'uv')) g.deleteAttribute(k);
   if (!g.attributes.normal) g.computeVertexNormals();
   g.morphAttributes = {};
   _bm.copy(toAnchor).multiply(c.matrixWorld);
@@ -451,7 +457,7 @@ export function optimizeStatic(root, opts = {}) {
   groundAO = !!opts.ground;
   const anchors = new Set([root, ...(opts.anchors || [])]);
   const addRef = (v, depth) => { if (!v || depth > 3) return; if (v.isObject3D) anchors.add(v); else if (Array.isArray(v)) v.forEach((x) => addRef(x, depth + 1)); else if (typeof v === 'object' && depth < 2 && !(v instanceof THREE.Vector3)) Object.values(v).forEach((x) => addRef(x, depth + 1)); };
-  root.traverse((o) => { for (const v of Object.values(o.userData || {})) addRef(v, 0); });
+  if(!opts.rigid)root.traverse((o) => { for (const v of Object.values(o.userData || {})) addRef(v, 0); });
   root.updateMatrixWorld(true);
   const buckets = new Map(); const merged = [];
   root.traverse((c) => {
@@ -478,12 +484,13 @@ export function optimizeStatic(root, opts = {}) {
       for (const g of geos) g.dispose();
       if (!geo) continue;
       const m = new THREE.Mesh(geo, b.mat); m.castShadow = b.cast; m.receiveShadow = b.recv || b.plain;
-      a.add(m); merged.push(...b.list);
+      m.userData.compiledGeometry=true;m.updateMatrix();m.matrixAutoUpdate=false; a.add(m); merged.push(...b.list);
     }
   }
   const mergedSet = new Set(merged);
   for (const c of merged) { let tgt = c.parent; while (mergedSet.has(tgt)) tgt = tgt.parent; for (const ch of [...c.children]) if (!mergedSet.has(ch)) tgt.attach(ch); }
   for (const c of merged) if (c.parent) c.parent.remove(c);
+  const prune=o=>{for(const c of [...o.children]){prune(c);if(c.isGroup&&!c.children.length&&!anchors.has(c))o.remove(c);}};prune(root);
   return root;
 }
 
@@ -491,9 +498,11 @@ export function optimizeStatic(root, opts = {}) {
 const LIGHT_POOL = 8;
 const lightPool = Array.from({ length: LIGHT_POOL }, () => { const l = new THREE.PointLight(0xffffff, 0, 10, 2); l.castShadow = false; scene.add(l); return l; });
 const vlTmp = new THREE.Vector3();
+let lightsNext=0;
 function attachedVisible(o) { for (let c = o; c; c = c.parent) { if (!c.visible) return false; if (c === scene) return true; } return false; }
 export function updateLights(fx, fz, night) {
-  const cand = [], now = performance.now();
+  const now=performance.now();if(now<lightsNext)return;lightsNext=now+100;
+  const cand = [];
   for (const v of MD.VLIGHTS) {
     let root = v; while (root.parent) root = root.parent;
     if (root !== scene) { v._lost = v._lost || now; if (now - v._lost > 8000) MD.VLIGHTS.delete(v); continue; }
@@ -511,12 +520,17 @@ export function updateLights(fx, fz, night) {
     l.position.set(c.x, c.y, c.z); l.color.copy(c.v.color); l.intensity = c.v.intensity * (night ? 1.3 : 0.6); l.distance = c.v.distance; l.decay = c.v.decay;
   }
 }
+export const frameStats={calls:0,triangles:0,renderMs:0};
 export function renderFrame() {
+  const start=performance.now();updateVisibleMatrices(scene);camera.updateMatrixWorld();
+  scene.matrixWorldAutoUpdate=false;
+  renderer.info.autoReset=false;renderer.info.reset();
   if (GFX.level === 0) renderer.render(scene, camera); else composer.render();
   const ac = renderer.autoClear; renderer.autoClear = false; camera.layers.set(LABEL_LAYER);
   const sb = scene.background, fg = scene.fog, su = renderer.shadowMap.autoUpdate;
   scene.background = null; scene.fog = null; renderer.shadowMap.autoUpdate = false;
   renderer.render(scene, camera);
-  renderer.shadowMap.autoUpdate = su; scene.background = sb; scene.fog = fg; camera.layers.set(0); renderer.autoClear = ac;
+  renderer.shadowMap.autoUpdate = su; scene.background = sb; scene.fog = fg; camera.layers.set(0); renderer.autoClear = ac;scene.matrixWorldAutoUpdate=true;
+  frameStats.calls=renderer.info.render.calls;frameStats.triangles=renderer.info.render.triangles;frameStats.renderMs=performance.now()-start;
 }
 export { THREE, mergeGeometries };

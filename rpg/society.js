@@ -1,3 +1,6 @@
+import {announce} from './state.js';
+import { encounterLevel } from './balance.js';
+import { hasCityOffice, cityOf } from './access.js';
 import { placeArenaPairs } from './arena-pairs.js';
 import { inHarborZone, pirateWater, safePirateSpawn } from './harbors.js';
 // Общество и мир: должности и выборы, законы, события Рима и Карфагена, вражеские корабли,
@@ -10,7 +13,7 @@ import { builtOf, hasBuilt, riders, shipById, sellPrice, collect } from './econo
 const { CFG, OFFICES, LAWS, BUILDINGS, RES, GEAR, ENEMIES, INSTANCES, STORY, ENEMY_SHIPS, ISLANDS, QUALITY } = D;
 const W = () => G.W;
 const playerByChar = (cid) => [...G.players.values()].find((q) => q.char && q.char.id === cid);
-const isOffice = (p, k) => !!(p.char && hasOffice(p.char, k)); // в любом городе
+const isOffice = (p, k) => !!p.char && hasCityOffice(p.char, k, cityOf(p));
 const forum = () => builtOf('forum')[0];
 const atForum = (p) => builtOf('forum').some((f) => dist(p, f) < BUILDINGS[f.type].r + 12); // весь форум, в том числе у ростр (там открывается окно форума)
 const ev = (kind) => W().events.find((e) => e.kind === kind && e.until > now());
@@ -53,6 +56,7 @@ export function candidate(p, office) {
   const cid0 = forumCity(p); if (!cid0) return; const e = cityOff(cid0).election; if (!e || !OFFICES[office]) return;
   if (rankOf(p.char) < OFFICES[office].minRank) return send(p, { type: 'log', text: `Нужно звание «${D.RANKS[OFFICES[office].minRank].name}».`, kind: 'warn' });
   const O = OFFICES[office];
+  if((p.char.officePoints?.[cid0]||0)<O.minOfficePoints)return send(p,{type:'log',text:`Нужно ${O.minOfficePoints} очков должности в ${cname(cid0)}. Выполняйте поручения форума и гавани этого города.`,kind:'warn'});
   if (O.minMil && D.milIdx(p.char.milPts || 0) < O.minMil) return send(p, { type: 'log', text: `Нужно военное звание «${D.MIL_RANKS[O.minMil].name}».`, kind: 'warn' });
   if (O.minTrade && ((p.char.stats2 && p.char.stats2.traded) || 0) < O.minTrade) return send(p, { type: 'log', text: `Нужен торговый оборот ${O.minTrade} ден. (у вас ${Math.round((p.char.stats2 && p.char.stats2.traded) || 0)}).`, kind: 'warn' });
   // у игрока — не больше двух должностей во всех городах: выдвигаться можно на столько, сколько ещё свободно
@@ -68,7 +72,7 @@ export function vote(p, office, cid) {
   const o = e.offices[office]; if (!o.cands[cid]) return;
   for (const c of Object.values(o.cands)) delete c.votes[p.char.id];
   if (!e.voted) e.voted = {}; if (!e.voted[p.char.id]) { e.voted[p.char.id] = 1; grantDig(p, 5); send(p, { type: 'log', text: '🗳 За участие в выборах Рим одобряет вас (+5).', kind: 'good' }); }
-  o.cands[cid].votes[p.char.id] = voteWeight(p.char) * (hasOffice(p.char, 'senator') ? 2 : 1);
+  o.cands[cid].votes[p.char.id] = voteWeight(p.char) * (hasCityOffice(p.char, 'senator', c0) ? 2 : 1);
   G.dirtyWorld = true;
 }
 // сложить полномочия: only — «город:должность» или просто должность (во всех городах)
@@ -120,7 +124,8 @@ export function lawTick() {
 
 // ---------- Действия должностей ----------
 export function officeAct(p, m) {
-  const w = W(), c = p.char;
+  const w = W(), c = p.char, cid = cityOf(p);
+  if (!forumCity(p)) return send(p, { type: 'log', text: 'Городские распоряжения — на форуме своего города.', kind: 'warn' });
   switch (m.act) {
     case 'reward': {
       if (!isOffice(p, 'praefectus')) return;
@@ -131,19 +136,20 @@ export function officeAct(p, m) {
     case 'priority': if (!isOffice(p, 'praefectus') || !BUILDINGS[m.bt]) return; w.priority = m.bt; log(`🏛 Префект объявил приоритетную стройку: ${BUILDINGS[m.bt].name} (двойное достоинство за вклад)`, 'info'); break;
     case 'hire': {
       if (!isOffice(p, 'legatus')) return;
-      if (!hasBuilt('castra')) return send(p, { type: 'log', text: 'Нужны Казармы.', kind: 'warn' });
-      const cap = 4 + builtOf('turris').length;
-      if (w.garrison >= cap) return send(p, { type: 'log', text: `Предел гарнизона: ${cap} (каждая башня +1).`, kind: 'warn' });
+      if (!builtOf('castra').some(b => cityOf(b) === cid)) return send(p, { type: 'log', text: 'Нужны Казармы.', kind: 'warn' });
+      const cap = 4 + builtOf('turris').filter(b => cityOf(b) === cid).length;
+      const co = cityOff(cid); co.garrison ||= 0;
+      if (co.garrison >= cap) return send(p, { type: 'log', text: `Предел гарнизона: ${cap} (каждая башня +1).`, kind: 'warn' });
       if (w.treasury < 100) return send(p, { type: 'log', text: 'В казне нужно 100 денариев.', kind: 'warn' });
-      w.treasury -= 100; w.garrison++; log(`🦅 Легат ${c.name} нанял легионера в гарнизон (${w.garrison}/${cap})`, 'good'); break;
+      w.treasury -= 100; co.garrison++; w.watch ||= {}; const watch = w.watch[cid] ||= { n: 2, lvl: 0, live: [] }; watch.n++; log(`🦅 Легат ${c.name} нанял легионера в гарнизон (${co.garrison}/${cap})`, 'good'); break;
     }
     case 'muster': {
       if (!isOffice(p, 'legatus') || (p.musterT && now() - p.musterT < 180)) return;
-      p.musterT = now(); G.muster = { x: p.x, z: p.z, until: now() + 60, by: c.name, got: new Set() };
+      p.musterT = now(); G.muster = { city: cid, x: p.x, z: p.z, until: now() + 60, by: c.name, got: new Set() };
       log(`🦅 Легат ${c.name} объявляет сбор! Подойдите к нему за 60 секунд — +опыт и +10% урона на 3 минуты.`, 'warn'); break;
     }
     case 'convoy': {
-      if (!isOffice(p, 'magister') || !hasBuilt('portus')) return;
+      if (!isOffice(p, 'magister') || !builtOf('portus').some(b => cityOf(b) === cid)) return;
       if (w.convoyAt && now() < w.convoyAt) return send(p, { type: 'log', text: 'Следующий обоз — позже.', kind: 'warn' });
       const res = m.res; if (!RES[res]) return;
       const n = Math.min(150, Math.floor(w.storage[res] || 0)); if (!n) return;
@@ -157,11 +163,12 @@ export function officeAct(p, m) {
 export function musterTick() {
   const M = G.muster; if (!M) return;
   if (now() > M.until) { G.muster = null; return; }
-  for (const p of G.players.values()) if (p.char && !M.got.has(p.id) && dist(p, M) < 20) { M.got.add(p.id); grantXp(p, 30); p.buffs.muster = now() + 180; send(p, { type: 'log', text: 'Вы явились на сбор легата: +10% урона на 3 минуты.', kind: 'good' }); }
+  for (const p of G.players.values()) if (p.char && cityOf(p) === M.city && !M.got.has(p.id) && dist(p, M) < 20) { M.got.add(p.id); grantXp(p, 30); p.buffs.muster = now() + 180; send(p, { type: 'log', text: 'Вы явились на сбор легата: +10% урона на 3 минуты.', kind: 'good' }); }
 }
 
 // ---------- События мира ----------
 export function eventsTick() {
+  if (![...G.players.values()].some(p => p.char && !p.bot)) return;
   const w = W(), t = now();
   // угроза растёт
   w.threat = Math.min(100, w.threat + CFG.threatGrow / 60 * (w.laws.open_port ? 2 : 1) * (1 / 1));
@@ -265,7 +272,7 @@ function barbarianRaid() {
     for (let i = 0; i < n; i++) {
       let x = src.x + rand(-8, 8), z = src.z + rand(-8, 8);
       if (WG.terrainHeight(x, z) < 0.5) { x = tgt.x + rand(-60, 60); z = tgt.z + 80; }
-      spawnMob(i === n - 1 && w.day >= 3 ? 'barb_chief' : pick(types), x, z, { lvl: 2 + Math.floor(w.day / 2), goal: (group[Math.floor(i / 2) % (group.length || 1)] || tgt).id, leash: 9999, src: { kind: 'raid', raid: e.id } });
+      spawnMob(i === n - 1 && encounterLevel() >= 6 && n >= 3 ? 'barb_chief' : pick(types), x, z, { lvl: encounterLevel(), goal: (group[Math.floor(i / 2) % (group.length || 1)] || tgt).id, leash: 9999, src: { kind: 'raid', raid: e.id } });
     }
   }, 30000);
 }
@@ -316,17 +323,20 @@ export function spawnEnemyShip(type, x, z, o = {}) {
   G.eships.set(s.id, s);
   return s;
 }
-function pirateAttack() {
-  const w = W();
-  if ((w.pirateCalm || 0) > Date.now() / 1000) return;
-  const sh = w.ships.filter((s) => !builtOf('portus').some((b) => dist(b, s) < 120));
-  let x, z;
-  if (sh.length) { const s = pick(sh); const a = rand(0, 6.28); x = s.x + Math.cos(a) * 260; z = s.z + Math.sin(a) * 260; }
-  else { const c = w.buildings.find((b) => b.type === 'colonia'); if (!c) return; x = c.x + 250; z = c.z; }
-  if (!WG.shipOk(x, z)) return;
-  spawnEnemyShip('pirate_ship', x, z, { mode: 'hunt', lvl: 4 + w.day, life: 600 });
-  w.events.push({ id: nid(), kind: 'pirates', title: 'Пираты', text: 'Киликийские пираты охотятся за кораблями.', until: now() + 600 });
-  log('🏴 Киликийские пираты замечены в море! Берегите корабли — или потопите их ради добычи.', 'bad');
+export function pirateEventActive(){return (W().events||[]).some(e=>e.kind==='pirates'&&e.until>now());}
+export function pirateAttack(){
+ const w=W();if(!pirateEventActive())w.events.push({id:nid(),kind:'pirates',title:'Пираты',text:'Восемь пиратских патрулей охотятся за кораблями; дальность преследования увеличена.',until:now()+600});
+ piratePatrolTick();G.dirtyWorld=true;log('🏴 Пиратский флот усилился. В море опаснее, у причалов безопасно.','bad');
+}
+export function piratePatrolTick(){
+ const event=pirateEventActive(),target=event?8:3,existing=[...G.eships.values()].filter(s=>s.type==='pirate_ship');
+ for(const s of existing)if(s.ambient&&!s.boarded){s.until=now()+900;if(!event&&s.eventBonus){s.until=now()+60;s.eventBonus=false;s.ambient=false;s.mode='flee';}}
+ let count=existing.filter(s=>s.mode!=='flee').length;
+ for(let k=0;count<target&&k<240;k++){
+  const c=G.world.cities[k%G.world.cities.length],a=k*2.399,r=c.R+180+(k%7)*60,x=c.x+Math.sin(a)*r,z=c.z+Math.cos(a)*r;
+  if(!WG.shipOk(x,z)||WG.terrainHeight(x,z)>-4||WG.waterEdgeDist(x,z)<35||WG.portOverlap(x,z,100,W().buildings.filter(b=>b.type==='portus'))||existing.some(s=>Math.hypot(s.x-x,s.z-z)<160)||[...G.players.values()].some(p=>dist(p,{x,z})<100))continue;
+  const e=spawnEnemyShip('pirate_ship',x,z,{mode:'hunt',lvl:encounterLevel(1),life:900});e.ambient=true;e.eventBonus=count>=3;e.patrol={x,z};e.patrolAngle=a;e.ry=a;existing.push(e);count++;
+ }
 }
 // прямая по воде между точками (последние `skip` метров до цели не проверяем — там причал или берег высадки)
 function seaClear(ax, az, bx, bz, skip = 0) { const L = Math.hypot(bx - ax, bz - az), n = Math.ceil(Math.max(0, L - skip) / 12); for (let i = 1; i <= n; i++) { const k = Math.min(1, (i * 12) / (L || 1)); if (!WG.shipOk(ax + (bx - ax) * k, az + (bz - az) * k)) return false; } return true; }
@@ -344,11 +354,15 @@ export function updateEnemyShips(dt) {
     let tx = null, tz = null;
     if (s.mode === 'raid' && !s.landed && s.land) { tx = s.land.x; tz = s.land.z; }
     else if (s.mode === 'hunt') {
-      let best = null, bd = 400;
-      const prey = s.prey && W().ships.find((x) => x.id === s.prey);
-      if (prey && (!pirate || !inHarborZone(prey.x, prey.z))) { best = prey; bd = dist(prey, s); } // пират гонится за кораблём с грузом
-      else for (const ps of W().ships) { if (ps.berth || (pirate && inHarborZone(ps.x, ps.z))) continue; const d = dist(ps, s); if (d < bd) { bd = d; best = ps; } }
-      if (best) { tx = best.x; tz = best.z; if (bd < def.len && (!s.ramT || t - s.ramT > 3)) { s.ramT = t; best.hp -= 45; fx({ kind: 'ram', x: best.x, z: best.z }); for (const q of riders(best)) send(q, { type: 'log', text: 'Пираты таранят ваш корабль!', kind: 'bad' }); } }
+      const aggressive=pirateEventActive(),limit=aggressive?650:240;
+      const ports=W().buildings.filter(b=>b.type==='portus'),safe=ps=>ps.hp>0&&!ps.berth&&!inHarborZone(ps.x,ps.z)&&!WG.portOverlap(ps.x,ps.z,aggressive?20:50,ports);
+      let best=null,bd=limit;for(const ps of W().ships){if(!safe(ps))continue;const d=dist(ps,s);if(d<bd){best=ps;bd=d;}}
+      s.prey=best?.id||null;
+      if(best){tx=best.x;tz=best.z;if(bd<def.len&&t-(s.ramT||0)>(aggressive?2:3)){s.ramT=t;best.hp-=aggressive?45:30;fx({kind:'ram',x:best.x,z:best.z});for(const q of riders(best))send(q,{type:'log',text:'Пираты таранят ваш корабль!',kind:'bad'});}}
+      else if(s.ambient){
+       if(!s.waypoint||dist(s,s.waypoint)<35){for(let i=0;i<16;i++){s.patrolAngle+=.7;const x=s.patrol.x+Math.sin(s.patrolAngle)*220,z=s.patrol.z+Math.cos(s.patrolAngle)*220;if(pirateWater(x,z,def.len/2)&&WG.waterEdgeDist(x,z)>35&&!WG.portOverlap(x,z,65,ports)){s.waypoint={x,z};break;}}}
+       if(s.waypoint){tx=s.waypoint.x;tz=s.waypoint.z;}
+      }
     }
     if (pirate && tx != null && inHarborZone(tx, tz)) { tx = null; tz = null; s.prey = null; s.path = null; }
     if (s.mode === 'raid' && !s.landed && t > s.born + 300) { s.landed = true; s.leaveAt = t; retreat(s, false); }
@@ -441,14 +455,14 @@ function raidWon(e) {
 
 // ---------- Задания ----------
 const QUEST_ENEMIES = [['wolf', 'main'], ['boar', 'main'], ['bear', 'main'], ['barb_warrior', 'main'], ['barb_archer', 'ferrum'], ['jackal', 'aegyptus'], ['snake', 'aegyptus'], ['bandit', 'cave'], ['robber', 'tomb'], ['punic_inf', 'punic'], ['deer', 'silva'], ['lion', 'aegyptus']];
-function genQuest() {
+function genQuest(source='forum',city='messana',slot=0) {
   const w = W(), lvl = Math.max(1, Math.round(w.day / 2));
-  const types = ['hunt', 'hunt', 'gather', 'deliver', 'fish', 'chest', 'craft', 'camp', 'instance', 'sell'];
-  const type = pick(types);
-  const q = { id: nid(), type, n: 1, lvl, made: Date.now() };
+  const types=source==='harbor'?['fish','deliver','sell','tunaSale']:['hunt','gather','craft','chest',...(G.world.camps.some(c=>!c.punic)?['camp']:[]),'instance'];
+  const type = types[slot%types.length];
+  const q = { id: nid(), type, source, city, n: 1, lvl, made: Date.now() };
   const isl = (id) => (ISLANDS.find((i) => i.id === id) || {}).name || id;
   switch (type) {
-    case 'hunt': { const [e, where] = pick(QUEST_ENEMIES); q.target = e; q.n = randi(3, ENEMIES[e].boss ? 1 : 7); q.title = `Охота: ${ENEMIES[e].name} ×${q.n}`; q.desc = `Убейте ${q.n} (${ENEMIES[e].name}). Где искать: ${INSTANCES[where] ? INSTANCES[where].name : isl(where)}.`; q.reward = { den: 15 * q.n + ENEMIES[e].xp, xp: ENEMIES[e].xp * q.n, dig: 4 + q.n }; break; }
+    case 'hunt': { const [e, where] = pick(QUEST_ENEMIES); q.target = e; q.n = (ENEMIES[e].boss ? 1 : randi(3,7)); q.title = `Охота: ${ENEMIES[e].name} ×${q.n}`; q.desc = `Убейте ${q.n} (${ENEMIES[e].name}). Где искать: ${INSTANCES[where] ? INSTANCES[where].name : isl(where)}.`; q.reward = { den: 15 * q.n + ENEMIES[e].xp, xp: ENEMIES[e].xp * q.n, dig: 4 + q.n }; break; }
     case 'gather': { const r = pick(['wood', 'stone', 'clay', 'iron_ore', 'marble', 'cedar', 'murex', 'papyrus', 'silver_ore']); q.target = r; q.n = randi(10, 30); q.title = `Добыча: ${RES[r].name} ×${q.n}`; q.desc = `Добудьте ${q.n} ед. (${RES[r].name}).`; q.reward = { den: Math.round(q.n * RES[r].p * 1.2), xp: q.n * 4, dig: 3 + Math.round(q.n / 5) }; break; }
     case 'deliver': { const r = pick(['plank', 'brick', 'bread', 'iron', 'hide', 'f_mackerel', 'wine', 'oil', 'marble']); q.target = r; q.n = randi(8, 25); q.title = `Поставка: ${RES[r].name} ×${q.n}`; q.desc = `Сдайте ${q.n} ед. (${RES[r].name}) на склад колонии (Хорреум или трюм в гавани).`; q.reward = { den: Math.round(q.n * RES[r].p * 1.5), xp: q.n * 5, dig: 6 + Math.round(q.n / 3) }; break; }
     case 'fish': { const sp = pick(['f_seabass', 'f_dentex', 'f_octopus', 'f_grouper', 'f_moray', 'f_tuna', 'f_swordfish']); q.target = sp; q.title = `Улов: ${RES[sp].name}`; q.desc = `Поймайте рыбу: ${RES[sp].name}. Ищите косяки на воде.`; q.reward = { den: RES[sp].p * 3, xp: 60 + RES[sp].p * 2, dig: 5 }; break; }
@@ -456,19 +470,30 @@ function genQuest() {
     case 'craft': { const r = pick(D.RECIPES.filter((x) => !x.lvl || x.lvl < 8)); q.target = r.id; q.n = r.gear ? 1 : randi(4, 12); q.title = `Ремесло: ${r.n || GEAR[r.gear].name}${q.n > 1 ? ' ×' + q.n : ''}`; q.desc = `Изготовьте в здании «${BUILDINGS[r.at].name}».`; q.reward = { den: 40 + q.n * 5, xp: 70 + q.n * 6, dig: 5 }; break; }
     case 'camp': { const c = pick(G.world.camps.filter((x) => !x.punic)); if (!c) return null; q.target = c.id; q.title = `Зачистка: лагерь варваров (${isl(c.island)})`; q.desc = 'Разгромите лагерь варваров вместе с вождём.'; q.reward = { den: 160 + c.lvl * 20, xp: 300 + c.lvl * 40, dig: 18 }; break; }
     case 'instance': { const k = pick(Object.keys(INSTANCES)); q.target = k; q.title = `Подземелье: ${INSTANCES[k].name}`; q.desc = `Пройдите подземелье (рекомендуемый уровень ${INSTANCES[k].lvl}).`; q.reward = { den: 120 + INSTANCES[k].lvl * 25, xp: 200 + INSTANCES[k].lvl * 50, dig: 15 }; break; }
+    case 'tunaSale': {q.target='f_tuna';q.n=1;q.title='Гавань: свежий тунец';q.desc='Попадите гарпуном, вытяните тунца, выгрузите его с баркаса и принесите в гавань на продажу.';q.reward={den:250,xp:180,dig:12};break;}
     case 'sell': { q.n = randi(4, 10) * 50; q.title = `Торговля: продать на ${q.n} ден.`; q.desc = 'Продайте товары на рынке или в порту на эту сумму.'; q.reward = { den: Math.round(q.n * 0.2), xp: Math.round(q.n * 0.4), dig: 6 }; break; }
   }
+  q.reward.office=type==='tunaSale'?8:5;
   return q;
 }
-export function questBoardTick() {
-  const w = W();
-  if (Date.now() >= (w.questsAt || 0)) { w.quests = []; w.questsAt = Date.now() + 10 * 60000; G.dirtyWorld = true; } // доска заданий обновляется целиком каждые 10 минут
-  while (w.quests.length < 8) { const q = genQuest(); if (q) w.quests.push(q); else break; }
+export function questBoardTick(){
+ const w=W();
+ if(w.questBoardVersion!==3||Date.now()>=(w.questsAt||0)){w.quests=[];w.questBoardVersion=3;w.questsAt=Date.now()+600000;G.dirtyWorld=true;}
+ for(const C of G.world.cities)for(const source of ['forum','harbor']){
+  if(source==='harbor'&&!C.harbor)continue;
+  let n=w.quests.filter(q=>q.city===C.id&&q.source===source).length;
+  while(n<(source==='forum'?10:4)){const q=genQuest(source,C.id,n);if(!q)break;w.quests.push(q);n++;G.dirtyWorld=true;}
+ }
 }
-const questSpot = (p) => { const f = forum() || builtOf('taberna')[0]; const camp = G.world.pois.find((q) => q.type === 'start_camp'); return (f && dist(p, f) < 30) || builtOf('taberna').some((b) => dist(p, b) < 15) || (camp && dist(p, camp) < 18); };
+const questSpot=(p,q)=>{
+ const types=q.source==='harbor'?['portus']:['forum','forum_m','taberna'];
+ if(G.W.buildings.some(b=>types.includes(b.type)&&b.city===q.city&&b.built&&!b.enemy&&!b.ruined&&dist(p,b)<(D.BUILDINGS[b.type].r||10)+12))return true;
+ const camp=G.world.pois.find(q=>q.type==='start_camp');return q.source!=='harbor'&&q.city==='messana'&&camp&&dist(p,camp)<18;
+};
 export function acceptQuest(p, qid) {
   const c = p.char, q = W().quests.find((x) => x.id === qid); if (!q) return;
-  if (!questSpot(p)) return send(p, { type: 'log', text: 'Задания берут на Форуме, в Таверне или в лагере колонистов.', kind: 'warn' });
+  if (!questSpot(p,q)) return send(p, { type: 'log', text: 'Это задание берут у своей доски: на форуме или в гавани указанного города.', kind: 'warn' });
+  if((c.doneQuests||[]).includes(q.id))return send(p,{type:'log',text:'Вы уже выполнили это поручение. Следующее появится при обновлении доски.',kind:'warn'});
   if (c.quests.length >= 6) return send(p, { type: 'log', text: 'Не больше 6 заданий одновременно.', kind: 'warn' });
   if (c.quests.some((x) => x.id === q.id)) return;
   c.quests.push({ ...q, got: 0 });
@@ -481,6 +506,9 @@ export function questHook(p, ev, d) {
   let changed = false;
   for (const q of c.quests) {
     let add = 0;
+    if(['store','sell','tunaSale'].includes(ev)&&q.city&&cityNear(p.x,p.z)!==q.city)continue;
+    if(ev==='tunaSale'&&q.type==='tunaSale')add=d.n;
+    else
     if (ev === 'kill' && q.type === 'hunt' && d.type === q.target) add = 1;
     else if (ev === 'gather' && q.type === 'gather' && d.res === q.target) add = d.n;
     else if (ev === 'store' && q.type === 'deliver' && d.res === q.target) add = d.n;
@@ -494,8 +522,12 @@ export function questHook(p, ev, d) {
   }
   for (const q of [...c.quests]) if (q.got >= q.n) {
     c.quests = c.quests.filter((x) => x !== q);
+    if((c.doneQuests||[]).includes(q.id))continue;
+    c.doneQuests=[...(c.doneQuests||[]),q.id].slice(-256);
+    const city=q.city||'messana',points=q.reward.office||5;
+    c.officePoints||={};c.officePoints[city]=(c.officePoints[city]||0)+points;
     c.den += q.reward.den; grantXp(p, q.reward.xp); grantDig(p, q.reward.dig);
-    send(p, { type: 'questDone', title: q.title, reward: q.reward });
+    send(p, { type: 'questDone', title: q.title, reward: {...q.reward,office:points},city,cityName:cname(city) });
     log(`✔ ${c.name} выполнил(а) задание «${q.title}»`, 'good');
   }
   if (changed) p.dirtyChar = true;
@@ -659,30 +691,30 @@ let damagePlayerSafe = () => {};
 export function setDmgFn(fn) { damagePlayerSafe = fn; }
 
 // ---------- Арена ----------
-const arenaB = () => builtOf('amphitheatrum')[0];
+const arenaB=(p=null)=>{const list=builtOf('amphitheatrum');return p?list.sort((a,b)=>dist(p,a)-dist(p,b))[0]:list.find(b=>b.id===G.arena?.bid)||list[0];};
 export function arenaStart(p, mode, grand) {
-  const b = arenaB(); if (!b || dist(p, b) > 60) return send(p, { type: 'log', text: 'Игры проходят в Амфитеатре.', kind: 'warn' });
+  const b = arenaB(p); if (!b || dist(p, b) > 95) return send(p, { type: 'log', text: 'Игры проходят в Амфитеатре.', kind: 'warn' });
   if (G.arena) return send(p, { type: 'log', text: 'Игры уже идут.', kind: 'warn' });
   if (grand) { if (!isOffice(p, 'lanista')) return; if (W().treasury < 150) return send(p, { type: 'log', text: 'Нужно 150 денариев в казне.', kind: 'warn' }); W().treasury -= 150; }
   const ry = b.ry || 0;
-  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 24, rz: 16, ry, mode: 'waves', fighters: new Set(), wave: 0, bets: [], state: 'prep', t: now() + 15, grand: !!grand, by: p.char.name };
-  log(`🏟 ${grand ? 'Ланиста объявил Большие игры' : `${p.char.name} открыл(а) гладиаторские бои`} в Амфитеатре! Бойцы — выходите на песок арены (15 с). Зрители — делайте ставки.`, 'warn');
+  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 32.4, rz: 21.6, ry, mode: 'waves', fighters: new Set(), wave: 0, bets: [], state: 'prep', t: now() + 15, grand: !!grand, by: p.char.name };
+  announce('games',`🏟 ${grand ? 'Ланиста объявил Большие игры' : `${p.char.name} открыл(а) гладиаторские бои`} в Амфитеатре! Бойцы — выходите на песок арены (15 с). Зрители — делайте ставки.`, 'warn');
   G.dirtyWorld = true;
 }
 export function onArenaFloor(p) { const a = G.arena; if (!a) return false; const dx = p.x - a.x, dz = p.z - a.z; const c = Math.cos(a.ry), s = Math.sin(a.ry); const lx = dx * c - dz * s, lz = dx * s + dz * c; return (lx / a.rx) ** 2 + (lz / a.rz) ** 2 < 1; }
 export function duelChallenge(p, pid) {
-  const q = G.players.get(pid), b = arenaB(); if (!q || !b || q === p) return;
-  if (dist(p, b) > 60 || dist(q, b) > 60) return send(p, { type: 'log', text: 'Оба бойца должны быть у Амфитеатра.', kind: 'warn' });
-  q.duelFrom = { pid: p.id, until: now() + 30 };
+  const q = G.players.get(pid), b = arenaB(p); if (!q || !b || q === p) return;
+  if (dist(p, b) > 95 || dist(q, b) > 95) return send(p, { type: 'log', text: 'Оба бойца должны быть у Амфитеатра.', kind: 'warn' });
+  q.duelFrom = { pid: p.id,bid:b.id, until: now() + 30 };
   send(q, { type: 'duelAsk', from: p.char.name, pid: p.id });
   send(p, { type: 'log', text: `Вызов на поединок отправлен: ${q.char.name}`, kind: 'info' });
 }
 export function duelAccept(p) {
   const d = p.duelFrom; if (!d || now() > d.until || G.arena) return;
-  const q = G.players.get(d.pid); const b = arenaB(); if (!q || !b) return;
-  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 24, rz: 16, ry: b.ry || 0, duel: true, mode: 'duel', fighters: new Set([p.id, q.id]), bets: [], state: 'prep', t: now() + 10, names: [q.char.name, p.char.name], ids: [q.id, p.id] };
+  const q=G.players.get(d.pid),b=builtOf('amphitheatrum').find(b=>b.id===d.bid);if(!q||!b||dist(p,b)>95||dist(q,b)>95)return;
+  G.arena = { bid: b.id, x: b.x, z: b.z, rx: 32.4, rz: 21.6, ry: b.ry || 0, duel: true, mode: 'duel', fighters: new Set([p.id, q.id]), bets: [], state: 'prep', t: now() + 10, names: [q.char.name, p.char.name], ids: [q.id, p.id] };
   for (const [i, x] of [q, p].entries()) { const s = i ? 1 : -1; x.x = b.x + Math.sin(b.ry || 0) * 12 * s; x.z = b.z + Math.cos(b.ry || 0) * 12 * s; send(x, { type: 'teleport', x: x.x, z: x.z }); x.hp = derivedOf(x.char).maxHp; }
-  log(`⚔ Поединок в Амфитеатре: ${q.char.name} против ${p.char.name}! Ставки — 10 секунд.`, 'warn');
+  announce('games',`⚔ Поединок в Амфитеатре: ${q.char.name} против ${p.char.name}! Ставки — 10 секунд.`, 'warn');
   G.dirtyWorld = true;
 }
 export function bet(p, on, amt) {
@@ -724,7 +756,7 @@ export function arenaTick() {
       if (a.wave >= 10) { for (const pid of a.fighters) { const p = G.players.get(pid); if (p && ![p.char.gear.weapon, ...p.char.items].some((g) => g && g.k === 'rudis')) addGear(p.char, 'rudis', 3); } log('🏆 Бойцы прошли все 10 волн! Каждый получает рудис чемпиона.', 'good'); chronicle('Бойцы прошли все 10 волн арены'); arenaEnd('all'); return; }
     }
     a.wave++; a.t = t + 6;
-    const n = Math.max(4, Math.ceil((a.fighters.size + Math.min(8, 1 + a.wave + Math.floor(a.fighters.size / 2))) / 2) * 2) - a.fighters.size;
+    const n = Math.max(4, a.fighters.size * 2, Math.ceil((a.fighters.size + Math.min(8, 1 + a.wave + Math.floor(a.fighters.size / 2))) / 2) * 2) - a.fighters.size;
     a.ffa = nid(); const botIds = [];
     const R = (k) => ({ x: a.x + Math.sin(a.ry + k) * 18, z: a.z + Math.cos(a.ry + k) * 12 });
     for (let i = 0; i < n; i++) {
@@ -766,8 +798,8 @@ function arenaEnd(winner, wp) {
   for (const p of G.players.values()) { if (p.arenaFfa) { p.arenaFfa = null; p.arenaPair = null; } }
   G.arena = null; G.dirtyWorld = true;
 }
-const isOfficeAny = (k) => !!holderOf(k);
-function payLanista(n) { const id = holderOf('lanista')?.id; const q = playerByChar(id); if (q) { q.char.den += n; q.dirtyChar = true; send(q, { type: 'log', text: `Доля ланисты: +${n} ден.`, kind: 'good' }); } else if (G.chars[id]) G.chars[id].den += n; }
+const isOfficeAny = k => !!holderOf(k, cityOf(G.arena));
+function payLanista(n) { const id = holderOf('lanista', cityOf(G.arena || { x: 0, z: 0 }))?.id; const q = playerByChar(id); if (q) { q.char.den += n; q.dirtyChar = true; send(q, { type: 'log', text: `Доля ланисты: +${n} ден.`, kind: 'good' }); } else if (G.chars[id]) G.chars[id].den += n; }
 export function arenaKnockout(p) {
   const a = G.arena; a.fighters.delete(p.id); p.arenaFfa = null; p.arenaPair = null;
   if (!a.duel) { grantXp(p, 15); p.char.ap = (p.char.ap || 0) + 2; p.dirtyChar = true; send(p, { type: 'log', text: 'За участие: 15 опыта и 2 очка арены.', kind: 'info' }); }

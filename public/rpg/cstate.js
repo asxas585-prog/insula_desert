@@ -7,6 +7,7 @@ export const S = {
 };
 let ws = null;
 export function connect(onMsg, onClose) {
+  if (ws) { ws.onclose = null; ws.close(); }
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/rpg');
   ws.onmessage = (ev) => { if (typeof ev.data === 'string') onMsg(JSON.parse(ev.data)); };
   ws.onclose = onClose;

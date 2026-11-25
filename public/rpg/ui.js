@@ -1,3 +1,6 @@
+import { initLoginCode, rememberedLogin } from './login.js';
+import { overlaps } from './footprints.js';
+import { baseSalePrice, purchasePrice } from './pricing.js';
 import { planCrate, tradeGear } from './crates.js';
 // Интерфейс: стартовый экран, HUD, окна, карта, рыбалка
 import * as THREE from 'three';
@@ -12,7 +15,24 @@ import { icon, hasIcon, gearIcon } from './icons.js';
 const { RES, GEAR, QUALITY, BUILDINGS, RECIPES, SHIPS, ENEMIES, OFFICES, LAWS, STORY, INSTANCES, PORTS, RANKS, STATS } = D;
 const $ = (id) => document.getElementById(id);
 let MB_PRE = ''; // плашка поверх окна здания (например, «здание продаётся»)
-const setHTML = (el, h) => { if (MB_PRE && el.id === 'mbody') h = MB_PRE + h; if (el._h !== h) { el._h = h; el.innerHTML = h; } };
+let modalPointerDown=false;
+document.addEventListener('pointerdown',()=>{modalPointerDown=true;},true);
+document.addEventListener('pointerup',()=>{modalPointerDown=false;},true);
+addEventListener('blur',()=>{modalPointerDown=false;});
+const setHTML=(el,h)=>{
+  if(MB_PRE&&el.id==='mbody')h=MB_PRE+h;
+  if(el._h===h)return;
+  const arena=el.id==='mbody'&&cur?.kind==='bld'&&S.blds.find(b=>b.id===cur.id)?.type==='amphitheatrum';
+  const context=arena?`${cur.id}:${cur.tab}`:null,keep=arena&&el._arenaContext===context;
+  if(keep&&modalPointerDown)return; // A timer update must not replace a button between pointer-down and click.
+  const values=keep?[...el.querySelectorAll('input[id],textarea[id],select[id]')].map(n=>({id:n.id,value:n.value,checked:n.checked})):[];
+  const active=keep&&el.contains(document.activeElement)?document.activeElement:null;
+  const focus=active?{id:active.id,start:active.selectionStart,end:active.selectionEnd}:null,scroll=el.scrollTop;
+  el._h=h;el.innerHTML=h;el._arenaContext=context;
+  for(const v of values){const n=document.getElementById(v.id);if(n&&el.contains(n)){n.value=v.value;n.checked=v.checked;}}
+  if(focus?.id){const n=document.getElementById(focus.id);if(n&&el.contains(n)){n.focus({preventScroll:true});if(focus.start!=null&&n.setSelectionRange)try{n.setSelectionRange(focus.start,focus.end);}catch{}}}
+  if(keep)el.scrollTop=scroll;
+};
 const resIco = (k) => hasIcon(k) ? icon(k) : (RES[k] ? RES[k].icon : '');
 const resName = (k) => RES[k] ? `${resIco(k)} ${RES[k].name}` : k;
 const gearName = (it) => it ? `<span class="q${it.q || 0}">${GEAR[it.k] ? GEAR[it.k].name : it.k}${it.q ? ` · ${QUALITY[it.q].name}` : ''}</span>` : '<span class="muted">—</span>';
@@ -26,24 +46,28 @@ export function initStart(onJoin) {
   const row = $('colorRow');
   row.innerHTML = D.COLORS.map((c) => `<button data-c="${c}" style="background:${hexCss(c)}" class="${c === color ? 'on' : ''}" title="Цвет туники"></button>`).join('');
   row.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; color = Number(b.dataset.c); for (const x of row.children) x.classList.toggle('on', x === b); };
-  try { $('nameInput').value = localStorage.getItem('imperiumName') || ''; const code = localStorage.getItem('imperiumCode'); if (code) { $('codeInput').value = code; } } catch {}
+  let storage; try { storage=localStorage; } catch {}
+  $('nameInput').value=rememberedLogin(storage).name;
+  initLoginCode({codeInput:$('codeInput'),codeHint:$('codeHint'),newCodeBtn:$('newCodeBtn'),passwordInput:$('passwordInput')},storage);
   const go = () => {
     const name = $('nameInput').value.trim();
     const code = $('codeInput').value.trim();
     if (!name) { $('startErr').textContent = 'Введите имя персонажа.'; return; }
+    if (code && $('passwordInput').value.length < 10) { $('startErr').textContent = 'Введите пароль от 10 символов.'; return; }
     if (code && !/^\d{5}$/.test(code)) { $('startErr').textContent = 'Код — ровно 5 цифр (или оставьте поле пустым).'; return; }
-    try { localStorage.setItem('imperiumName', name); localStorage.setItem('imperiumColor', String(color)); if (code) localStorage.setItem('imperiumCode', code); } catch {}
+    try { localStorage.setItem('imperiumName', name); localStorage.setItem('imperiumColor', String(color)); } catch {}
     $('start').classList.add('hidden');
-    onJoin(name, code, color);
+    onJoin(name, code, color, $('passwordInput').value);
   };
   $('joinBtn').onclick = go;
   $('nameInput').onkeydown = (e) => { if (e.key === 'Enter') go(); };
   $('codeInput').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  $('passwordInput').onkeydown = (e) => { if (e.key === 'Enter') go(); };
   $('mclose').onclick = closeModal;
 }
 export function onStarted(fresh) {
   $('hud').classList.remove('hidden');
-  addLog('Добро пожаловать в колонию! WASD — идти, Shift — бег, мышь — камера, ЛКМ — удар (серия из трёх), ПКМ — блок, Пробел — прыжок, Q — перекат, E — действие, H — помощь.', 'good');
+  addLog('Добро пожаловать в колонию! WASD — идти, Shift — бег, мышь — камера, ЛКМ — удар; с луком удержать и отпустить ЛКМ — выстрел; удержать и отпустить F — пилум; ПКМ — блок или отмена выстрела, Пробел — прыжок, Q — перекат, E — действие, H — помощь.', 'good');
   if (fresh) setTimeout(() => openHelp(), 600);
   chatSetup();
 }
@@ -74,9 +98,14 @@ export function floatText(x, y, z, text, color = '#fff', big = false) {
 }
 export function hurtFlash() { const h = $('hurt'); h.style.transition = 'none'; h.style.opacity = '1'; requestAnimationFrame(() => { h.style.transition = 'opacity 0.6s'; h.style.opacity = '0'; }); }
 export function levelUp(m) { toast(`⭐ Уровень ${m.level}! Очков характеристик: ${m.points} (C — персонаж)`, true); }
-export function questDone(m) { toast(`✔ Задание выполнено: ${m.title}`, true); addLog(`Награда: ${m.reward.den} ден., ${m.reward.xp} опыта, ${m.reward.dig} достоинства`, 'good'); }
-export function showDead(m) { $('deadBox').classList.remove('hidden'); $('deadText').textContent = `${m.by ? 'Вас сразил(а): ' + m.by + '. ' : ''}Потеряно ${m.lost} денариев. Возрождение через ${m.t} с…`; }
-export function hideDead() { $('deadBox').classList.add('hidden'); }
+export function questDone(m) { toast(`✔ Задание выполнено: ${m.title}`, true); addLog(`Награда: ${m.reward.den} ден., ${m.reward.xp} опыта, ${m.reward.dig} достоинства, ${m.reward.office||0} очков должности (${esc(m.cityName||m.city||'Мессана')})`, 'good'); }
+let deadTimer = null;
+export function showDead(m) {
+  hideDead(); $('deadBox').classList.remove('hidden'); const until=performance.now()+Math.max(0,m.t||0)*1000;
+  const update=()=>{const left=Math.max(0,Math.ceil((until-performance.now())/1000)); $('deadText').textContent=`${m.by ? 'Вас сразил(а): '+m.by+'. ' : ''}Потеряно ${m.lost||0} денариев. ${left ? 'Возрождение через '+left+' с…' : 'Ожидание возрождения…'}`;};
+  update(); deadTimer=setInterval(update,250);
+}
+export function hideDead() { clearInterval(deadTimer); deadTimer=null; $('deadBox').classList.add('hidden'); }
 export function setPrompt(t) { setHTML($('prompt'), esc(t)); }
 export function showHold(p) { $('holdRing').classList.toggle('hidden', !p); if (p) $('holdArc').style.strokeDashoffset = String(100.5 * (1 - p)); }
 export function npcDialog(m) {
@@ -129,7 +158,7 @@ function toggle(kind) { if (cur && cur.kind === kind) closeModal(); else open(ki
 // ---------- Модальное окно ----------
 let cur = null; // {kind, tab, id}
 export const anyModal = () => !!cur;
-export function closeModal() { cur = null; $('modal').classList.add('hidden'); }
+export function closeModal() { cur = null; $('modal').classList.add('hidden');if($('modal').contains(document.activeElement))document.activeElement.blur(); }
 function open(kind, opts = {}) {
   cur = { kind, tab: opts.tab || null, id: opts.id ?? null, key: opts.key ?? null };
   $('modal').classList.remove('hidden'); $('modal').classList.toggle('big', kind === 'build');
@@ -219,11 +248,12 @@ $('mbody').addEventListener('click', (e) => {
     case 'shipBuild': net({ type: 'shipBuild', st: d.st }); break;
     case 'cargo': net({ type: 'cargo', sid: Number(d.sid), res: d.res, n: Number(d.n), dir: d.dir }); break;
     case 'unload': net({ type: 'unload', sid: Number(d.sid) }); break;
-    case 'shipRepair': net({ type: 'shipRepair', sid: Number(d.sid) }); break;
+
     case 'colonyLoad': net({ type: 'colonyLoad', bid: Number(d.bid) }); break;
     case 'cand': net({ type: 'cand', office: d.office }); break;
     case 'vote': net({ type: 'vote', office: d.office, cid: d.cid }); break;
-    case 'arenaSit': closeModal(); C.arenaSit(Number(d.bid)); break;
+    case 'arenaSit': C.arenaSit(Number(d.bid));render();break;
+    case 'arenaLeave': C.arenaLeave();closeModal();break;
     case 'warCreate': { const zv = ($('warZone') || {}).value; net({ type: 'warCreate', size: Number(d.size) || 1, mode: d.mode, zone: zv === '' || zv == null ? null : Number(zv) }); break; }
     case 'warRent': net({ type: 'warRent', k: d.k }); break;
     case 'warBot': net({ type: 'warBot', id: Number(d.id), side: d.side, on: d.on === '1' }); break;
@@ -255,6 +285,7 @@ $('mbody').addEventListener('click', (e) => {
     case 'permit': net({ type: 'permit', city: d.city, d: d.d, n: Number(($('pm_' + d.d) || {}).value) || 1 }); break;
     case 'release': net({ type: 'release', city: d.city }); break;
     case 'claimMode': startClaim(d.city); break;
+    case 'roadMode': startClaim(d.city);S.placing.cityRoad=true;S.placing.n=1;addLog('Эдил: ЛКМ — улица 4×4 м; продолжайте от главной дороги. Esc — выйти.','info');break;
     case 'colonyUp': net({ type: 'colonyUp', bid: Number(d.bid), i: Number(d.i) }); break;
     case 'guardOrd': net({ type: 'guardOrder', mode: d.m, bid: d.bid ? Number(d.bid) : null }); break;
     case 'guardFire': if (confirm('Рассчитать телохранителя?')) net({ type: 'guardFire' }); break;
@@ -263,7 +294,15 @@ $('mbody').addEventListener('click', (e) => {
     case 'squadOut': case 'squadIn': case 'squadDisband': net({ type: d.a, id: Number(d.id) }); break;
     case 'squadOrd': net({ type: 'squadOrder', id: Number(d.id), mode: d.m }); break;
     case 'squadForm': net({ type: 'squadOrder', id: Number(d.id), form: d.f }); break;
+    case 'tunaUnload':case 'tunaLoad':net({type:d.a,sid:Number(d.sid),slot:Number(d.slot)});break;
+    case 'tunaSell':net({type:d.a,bid:Number(d.bid)});break;
     case 'guardHire': case 'guardToggle': net({ type: d.a }); break;
+    case 'guide': open('guide'); break;
+    case 'guideTarget': C.markDestination(Number(d.x), Number(d.z), d.label); closeModal(); break;
+    case 'warehouseMove': net({type:'warehouseMove',bid:Number(d.bid),res:d.res,n:Number(d.n)||10000,dir:d.dir}); break;
+    case 'autoStore': net({type:'autoStore',bid:Number(d.bid)}); break;
+    case 'shipScrap': if (confirm('Списать остов без восстановления?')) net({type:'shipScrap',sid:Number(d.sid)}); break;
+    case 'squadReinforce': net({type:'squadReinforce',id:Number(d.id)}); break;
     case 'shipBuy': net({ type: 'shipBuy', sid: Number(d.sid) }); break;
     case 'shipRome': net({ type: 'shipRome', sid: Number(d.sid), gift: d.gift === '1' }); break;
     case 'shipForSale': net({ type: 'shipForSale', sid: Number(d.sid), price: d.off ? 0 : Number(($('sale_' + d.sid) || {}).value) || 0 }); break;
@@ -283,10 +322,10 @@ $('mbody').addEventListener('click', (e) => {
 function render() {
   if (!cur) return;
   $('mmove').classList.add('hidden');
-  const f = { war: renderWar, ratings: renderRatings, army: renderArmy, econ: renderEcon, city: renderCity, inv: renderInv, char: renderChar, journal: renderJournal, map: renderMapWin, build: renderBuild, bld: renderBld, camp: renderCamp, inst: renderInst, ship: renderShip, help: renderHelp, trader: renderTrader, enc: renderEnc }[cur.kind];
+  const f = { guide: renderTradeGuide, war: renderWar, ratings: renderRatings, army: renderArmy, econ: renderEcon, city: renderCity, inv: renderInv, char: renderChar, journal: renderJournal, map: renderMapWin, build: renderBuild, bld: renderBld, camp: renderCamp, inst: renderInst, ship: renderShip, help: renderHelp, trader: renderTrader, enc: renderEnc }[cur.kind];
   if (f) f();
 }
-export function onChar() { renderHUD(); if (cur && ['inv', 'char', 'bld', 'camp', 'ship', 'build', 'trader', 'econ', 'army'].includes(cur.kind)) render(); }
+export function onChar() { renderHUD(); if (cur && ['guide', 'inv', 'char', 'bld', 'camp', 'ship', 'build', 'trader', 'econ', 'army'].includes(cur.kind)) render(); }
 export function onWorld() { if (cur && cur.kind !== 'map') render(); }
 // ---------- Военное дело (U) ----------
 function renderArmy() {
@@ -310,8 +349,8 @@ function renderArmy() {
       <h3 class="sec">Охранять постройку</h3>${mine.map((b) => `<div class="row"><span class="grow">${BUILDINGS[b.type].name}</span><button class="btn sm ${G2.mode === 'bld' && G2.bid === b.id ? 'good' : 'alt'}" data-a="guardOrd" data-m="bld" data-bid="${b.id}">Охранять</button></div>`).join('') || '<div class="muted">Своих построек нет.</div>'}` : `<button class="btn" data-a="guardHire" ${A.office ? '' : 'disabled title="Нужна должность"'}>Нанять (у Арсенала, ${D.GUARD_PRICE} ден./день)</button>`)); return; }
   const rows = A.squads.map((q, i) => { const S2 = D.SQUADS[q.type], up = q.up || {};
     const ups = Object.entries(D.SQUAD_UP).map(([k, U]) => { const lv = up[k] || 0; return lv < U.max ? `<button class="btn sm alt" data-a="squadUp" data-id="${q.id}" data-k="${k}" title="${U.desc}: ${U.den(lv + 1)} ден. + ${Object.entries(U.cost(lv + 1)).map(([r, n]) => resName(r) + ' ×' + n).join(', ')}">${U.name} ${lv}→${lv + 1}</button>` : `<span class="tag">${U.name} ${lv}</span>`; }).join(' ');
-    return `<div class="card"><div class="t">${i + 1}. ${S2.icon} ${esc(q.name)} <span class="tag">ур. ${q.lvl}</span> <span class="tag">${q.live ? `на поле ${q.live}/${q.size}` : q.homeAway ? 'дома (призвать у военных зданий)' : 'в претории'}</span> <span class="tag">${q.form === 'line' ? 'стеной' : 'врассыпную'}</span>${q.left != null ? ` <span class="tag">💰 уйдут через ${fmtT(q.left)}</span>` : ''}${q.slaves ? ' <span class="tag">из рабов</span>' : ''}</div><div class="muted">${S2.desc} Воинов: ${q.size} · побед: ${q.kills} · потерь: ${q.lost}</div>
-      <div class="row">${ups}</div><div class="row"><button class="btn sm good" data-a="squadOut" data-id="${q.id}" ${q.live ? 'disabled' : ''}>Вызвать</button><button class="btn sm alt" data-a="squadHome" data-id="${q.id}" ${q.live ? '' : 'disabled'}>🏠 Домой</button><button class="btn sm" data-a="squadOrd" data-id="${q.id}" data-m="follow">За мной</button><button class="btn sm" data-a="squadOrd" data-id="${q.id}" data-m="hold">Стоять</button><button class="btn sm" data-a="squadForm" data-id="${q.id}" data-f="${q.form === 'line' ? 'loose' : 'line'}">${q.form === 'line' ? 'Врассыпную' : 'Стеной'}</button><span class="grow"></span><button class="btn sm alt" data-a="squadDisband" data-id="${q.id}">Распустить</button></div></div>`; }).join('');
+    return `<div class="card"><div class="t">${i + 1}. ${S2.icon} ${esc(q.name)} <span class="tag">ур. ${q.lvl}</span> <span class="tag">${q.live ? `на поле ${q.live}/${q.size}` : q.homeAway ? 'дома (призвать у военных зданий)' : 'в претории'}</span> <span class="tag">${q.form === 'tight' ? 'сомкнутый' : q.form === 'line' ? 'линия' : 'рассыпной'}</span>${q.left != null ? ` <span class="tag">💰 уйдут через ${fmtT(q.left)}</span>` : ''}${q.slaves ? ' <span class="tag">из рабов</span>' : ''}</div><div class="muted">${S2.desc} ${q.stats ? `HP бойца ${q.stats.hp} · урон ${Math.round(q.stats.damage)} · броня ${Math.round(q.stats.armor)} · дальность ${q.stats.range} · скорость ${q.stats.speed.toFixed(1)}.<br>` : ''}Воинов: ${q.size} · побед: ${q.kills} · потерь: ${q.lost}</div>
+      <div class="row">${q.replacementCost ? `<button class="btn sm good" data-a="squadReinforce" data-id="${q.id}">Пополнить: ${q.replacementCost} ден.</button>` : ''}${ups}</div><div class="row"><button class="btn sm good" data-a="squadOut" data-id="${q.id}" ${q.live ? 'disabled' : ''}>Вызвать</button><button class="btn sm alt" data-a="squadHome" data-id="${q.id}" ${q.live ? '' : 'disabled'}>🏠 Домой</button><button class="btn sm" data-a="squadOrd" data-id="${q.id}" data-m="follow">За мной</button><button class="btn sm" data-a="squadOrd" data-id="${q.id}" data-m="hold">Стоять</button><button class="btn sm" data-a="squadForm" data-id="${q.id}" data-f="${q.form === 'line' ? 'loose' : 'line'}">${q.form === 'line' ? 'Врассыпную' : 'Стеной'}</button><span class="grow"></span><button class="btn sm alt" data-a="squadDisband" data-id="${q.id}">Распустить</button></div></div>`; }).join('');
   const shop = Object.entries(D.SQUADS).map(([k, S2]) => { const no = (!A.praetorium && !S2.merc) || A.squads.length >= A.limit || c.rank < S2.rank;
     return `<div class="row"><span class="nm" style="width:230px">${S2.icon} ${S2.name}</span><span class="grow muted">${S2.desc} (${S2.n} воинов${S2.rank ? `, от звания «${RANKS[S2.rank].name}»` : ''}${S2.merc ? `, ${S2.upkeep} ден./мин` : ''})</span><span class="nm">${S2.price} ден.</span><button class="btn sm" data-a="squadRecruit" data-k="${k}" ${no ? 'disabled' : ''}>${S2.merc ? 'Нанять' : 'Набрать'}</button>${S2.merc ? '' : `<button class="btn sm alt" data-a="squadRecruit" data-k="${k}" data-slaves="1" ${no || (A.freeSlaves || 0) < S2.n ? 'disabled' : ''} title="Воинами станут ${S2.n} ваших свободных рабов (сейчас ${A.freeSlaves || 0}); павший — потерянный раб">Из рабов · ${Math.round(S2.price * D.SLAVE_SQUAD_K)} ден.</button>`}</div>`; }).join('');
   setHTML($('mbody'), `<div class="card"><div class="muted">Отряды набирают из вольных людей у своего Претория на латифундии. Можно держать: ${A.limit} (военное звание «${MR[mi].name}», гражданское звание и должность легата добавляют). Управление: 1–5 — выбрать отряд (значки над поясом), 0 — отменить все приказы, N — идти к прицелу, O — за мной, 6 — стоять, L — строй, Z — вид сверху: ПКМ по земле — идти, ПКМ по врагу — атаковать (пехота и конница идут в атаку строем, лучники и скорпионы стреляют издали). 🏠 — отправить домой (призвать снова — у Претория, в Казармах или Арсенале). Убитые отрядами и телохранителем враги дают вам опыт, добычу и военные очки.</div></div>${rows || ''}<h3 class="sec">Набрать отряд${A.praetorium ? '' : ' — нужен Преторий на латифундии'}</h3>${shop}`);
@@ -509,8 +548,9 @@ function renderInv() {
     const cells = ents.map(([k, n]) => slotHtml('r:' + k, hasIcon(k) ? icon(k) : `<span style="font-size:22px">${RES[k]?.icon || '?'}</span>`, Math.floor(n), 0, `${RES[k]?.name || k} ×${Math.floor(n)} · ${Math.round((RES[k]?.w || 0) * n * 10) / 10} кг`, sel === 'r:' + k)).join('') + '<div class="slot empty"></div>'.repeat(Math.max(0, 30 - ents.length));
     let det = '<div class="muted">Выберите предмет в ячейке.</div>';
     if (sel && sel.startsWith('r:')) { const k = sel.slice(2), n = Math.floor(c.bag[k] || 0); if (n > 0) det = `<div class="itemName">${resName(k)} ×${n}</div><div class="muted">вес ${Math.round((RES[k]?.w || 0) * n * 10) / 10} кг · цена ~${RES[k]?.p || 0} ден./шт.</div><div class="acts">${RES[k] && RES[k].food ? `<button class="btn sm good" data-a="eat" data-res="${k}">Съесть</button>` : ''}${k === 'wheat' && c.horseOut ? '<button class="btn sm" data-a="horseFeedA">Покормить коня</button>' : ''}<button class="btn sm alt" data-a="dropRes" data-res="${k}" data-n="1">Выбросить 1</button><button class="btn sm alt" data-a="dropRes" data-res="${k}" data-n="${n}">Выбросить все</button></div>`; }
+    const tunaCarry=c.tunaCarry?`<div class="card"><b>В руках: тунец ${c.tunaCarry.kg} кг</b><p>Отнесите в гавань → Рыбный причал, либо верните на свободный борт баркаса через G → Корабль.</p></div>`:'';
     const carry = c.carry ? `<div class="card"><div class="t">В руках: 📦 ${crateName(c.carry)}</div><div class="muted">X — поставить на землю. E у корабля — погрузить. Продаётся торговцам.</div></div>` : '';
-    setHTML($('mbody'), `<div class="card"><div class="stat"><span>Нагрузка</span><span>${c.bagW} / ${c.bagMax} кг${c.bagW > c.bagMax ? ' — перегруз!' : ''}</span></div><div class="prog"><div style="width:${Math.min(100, c.bagW / c.bagMax * 100)}%"></div></div><div class="stat"><span>Денарии</span><span>${c.den}</span></div><div class="stat"><span>Обрывки папируса · лоскуты чертежа</span><span>${c.scraps}/5 · ${c.quadScraps || 0}/4</span></div></div>${carry}<div class="invgrid">${cells}</div><div class="invdet">${det}</div><div class="muted" style="margin-top:8px">Y — съесть самое подходящее. Еда: ${food.map((k) => RES[k].name).join(', ') || 'нет'}.</div>`);
+    setHTML($('mbody'), `<div class="card"><div class="stat"><span>Нагрузка</span><span>${c.bagW} / ${c.bagMax} кг${c.bagW > c.bagMax ? ' — перегруз!' : ''}</span></div><div class="prog"><div style="width:${Math.min(100, c.bagW / c.bagMax * 100)}%"></div></div><div class="stat"><span>Денарии</span><span>${c.den}</span></div><div class="stat"><span>Обрывки папируса · лоскуты чертежа</span><span>${c.scraps}/5 · ${c.quadScraps || 0}/4</span></div></div>${carry}${tunaCarry}<div class="invgrid">${cells}</div><div class="invdet">${det}</div><div class="muted" style="margin-top:8px">Y — съесть самое подходящее. Еда: ${food.map((k) => RES[k].name).join(', ') || 'нет'}.</div>`);
   }
 }
 function gearStats(it) { const g = GEAR[it.k]; if (!g) return ''; const m = QUALITY[it.q || 0].mul; if (g.slot === 'weapon') return g.kind === 'rod' ? 'рыбалка' : `урон ${Math.round(g.dmg * m)}`; if (g.slot === 'offhand') return `блок ${Math.round(g.block * 100)}%, броня ${Math.round(g.armor * m)}`; return `броня ${Math.round(g.armor * m)}`; }
@@ -524,7 +564,7 @@ function renderChar() {
   if (cur.tab === 'stats') {
     const st = Object.entries(STATS).map(([k, s]) => `<div class="row"><span class="nm" style="width:120px">${s.name}</span><b style="width:28px">${c.stats[k]}</b><span class="grow muted">${s.desc}</span>${c.points ? `<button class="btn sm" data-a="stat" data-k="${k}">+1</button>` : ''}</div>`).join('');
     setHTML($('mbody'), `<div class="cols"><div><h3>Уровень ${c.level}</h3><div class="prog"><div style="width:${c.xp / c.need * 100}%"></div></div><div class="muted">${c.xp} / ${c.need} опыта</div>
-      <h3 style="margin-top:14px">Характеристики ${c.points ? `<span class="tag" style="color:var(--gold2)">свободно: ${c.points}</span>` : ''}</h3>${st}</div>
+      <div class="muted">${/^c[0-9]{5}$/.test(c.id)?`Личный код: <b>${esc(c.id.slice(1))}</b>. Для входа с другого устройства также нужен ваш пароль.`:'Гостевой персонаж: вход привязан к этому браузеру; личный код не назначен.'}</div><h3 style="margin-top:14px">Характеристики ${c.points ? `<span class="tag" style="color:var(--gold2)">свободно: ${c.points}</span>` : ''}</h3>${st}</div>
       <div><h3>Итог</h3><div class="card">${[['Здоровье', d.maxHp], ['Выносливость', d.maxSt], ['Урон в ближнем бою', '×' + d.melee.toFixed(2)], ['Урон из лука и пилумом', '×' + d.ranged.toFixed(2)], ['Скорость ударов', '×' + d.atkSpeed.toFixed(2)], ['Вместимость сумки', d.bag + ' кг'], ['Цены покупки', Math.round(d.buy * 100) + '%'], ['Цены продажи', Math.round(d.sell * 100) + '%'], ['Броня', c.armor + '%']].map(([a, b]) => `<div class="stat"><span>${a}</span><span>${b}</span></div>`).join('')}</div>
       <h3>Статистика</h3><div class="card">${[['Добыто ресурсов', c.stats2.gathered], ['Вклад в постройки', c.stats2.built], ['Поймано рыбы', c.stats2.fish], ['Побеждено врагов', c.stats2.killed], ['Падений в бою', c.stats2.deaths], ['Оборот торговли', c.stats2.traded + ' ден.']].map(([a, b]) => `<div class="stat"><span>${a}</span><span>${b}</span></div>`).join('')}</div></div></div>`);
   } else if (cur.tab === 'spec') {
@@ -566,7 +606,7 @@ function renderJournal() {
     const list = STORY.map((s, i) => `<div class="card" style="${i === w.story ? 'border-color:var(--gold)' : i > w.story ? 'opacity:.45' : ''}"><div class="t">${i < w.story ? '✔' : i === w.story ? '▶' : '•'} Глава ${i + 1}. ${s.title}</div>${i <= w.story ? `<div>${s.text}</div><div class="muted">Награда всем колонистам: ${s.reward.den} ден., ${s.reward.xp} опыта, ${s.reward.dig} достоинства</div>` : ''}</div>`).join('');
     setHTML($('mbody'), list);
   } else if (cur.tab === 'quests') {
-    setHTML($('mbody'), (c.quests.map((q) => `<div class="card"><div class="t">${q.title}</div><div class="muted">${q.desc}</div><div class="prog"><div style="width:${q.got / q.n * 100}%"></div></div><div class="row" style="border:0;padding:4px 0"><span class="grow muted">${q.got}/${q.n} · награда ${q.reward.den} ден., ${q.reward.xp} опыта</span><button class="btn sm alt" data-a="questDrop" data-id="${q.id}">Отказаться</button></div></div>`).join('') || '<div class="muted">Нет заданий. Их берут на Форуме, в Таверне или в лагере колонистов.</div>'));
+    setHTML($('mbody'), (c.quests.map((q) => `<div class="card"><div class="t">${q.title}</div><div class="muted">${q.desc}</div><div class="prog"><div style="width:${q.got / q.n * 100}%"></div></div><div class="row" style="border:0;padding:4px 0"><span class="grow muted">${q.got}/${q.n} · награда ${q.reward.den} ден., ${q.reward.xp} опыта, ${q.reward.office||5} очк. должности</span><button class="btn sm alt" data-a="questDrop" data-id="${q.id}">Отказаться</button></div></div>`).join('') || '<div class="muted">Нет заданий. Их берут на Форуме, в Таверне или в лагере колонистов.</div>'));
   } else if (cur.tab === 'world') {
     const ev = (w.events || []).map((e) => { const I = D.EVENT_INFO[e.kind === 'raid' ? e.foe : e.kind]; return `<div class="card evc" title="${I ? esc(`${I.what}\nЧто делать: ${I.todo}\nНаграда: ${I.reward}`) : ''}"><div class="t">${I ? I.icon + ' ' : ''}${e.title}</div><div class="muted">${e.text}${(e._end ? e._end - performance.now() / 1000 : e.left) > 0 ? ` · ${e.kind === 'raid' ? 'набег закончится через' : 'осталось'} ${fmtT(e._end ? e._end - performance.now() / 1000 : e.left)}` : ''}</div>${I ? `<div class="evmore"><div>${I.what}</div><div><b>Что делать:</b> ${I.todo}</div><div><b>Награда:</b> ${I.reward}</div></div>` : ''}</div>`; }).join('') || '<div class="muted">Сейчас спокойно. Все возможные события — во вкладке «Возможные события».</div>';
     const rq = (w.requests || []).map((r) => `<div class="card"><div class="t">🦅 Рим просит: ${resName(r.res)} — ${r.got}/${r.n}</div><div class="muted">Осталось ${fmtT(r.left)}. Сдавать на Форуме.</div></div>`).join('');
@@ -602,9 +642,9 @@ function renderBuild() {
     else if (!d.pub && mine >= rk.priv) why = `лимит частных построек (${rk.priv})`;
     const cost = d.pub && S.world && S.world.offices.aedilis ? Object.fromEntries(Object.entries(d.cost).map(([a, n]) => [a, Math.ceil(n * 0.85)])) : d.cost;
     const nC = D.cellsOf(k), cellTag = d.road || d.colony ? '' : d.lat ? '<span class="tag" title="Ставится на латифундии">латифундия</span>' : `<span class="tag" title="Участок из своих клеток ${nC}×${nC} (клетка 4×4 м)">▦ ${nC}×${nC} = ${nC * nC} кл.</span>`;
-    return head + `<div class="row"><span class="nm" style="width:230px">${d.name} ${cellTag}${d.prod ? ` <span class="tag">${Object.keys(d.prod).map((x) => resIco(x)).join('')}</span>` : ''}</span><span class="grow muted" title="${esc(d.desc)}">${d.desc}</span><span class="nm" style="font-size:12px">${costHtml(cost, d.pub ? { ...S.world?.storage, ...c.bag } : c.bag)}</span><button class="btn sm" data-a="place" data-bt="${k}" ${why ? 'disabled' : ''} title="${esc(why)}">${why ? esc(why.length > 18 ? why.slice(0, 18) + '…' : why) : 'Поставить'}</button></div>`;
+    return head + `<div class="row"><span class="nm" style="width:230px">${d.name} ${cellTag}${d.prod ? ` <span class="tag">${Object.keys(d.prod).map((x) => resIco(x)).join('')}</span>` : ''}</span><span class="grow muted" title="${esc(d.desc)}">${d.desc}</span><span class="nm" style="font-size:12px">${costHtml(cost, c.cityResources || c.bag)}</span><button class="btn sm" data-a="place" data-bt="${k}" ${why ? 'disabled' : ''} title="${esc(why)}">${why ? esc(why.length > 18 ? why.slice(0, 18) + '…' : why) : 'Поставить'}</button></div>`;
   }).join('');
-  setHTML($('mbody'), `<div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="btn sm alt" data-a="demolishMode" title="Убрать дорогу, мост или свою постройку (часть материалов вернётся)">🔨 Снос</button></div><div class="muted" style="margin-bottom:8px">${tabDef[0] === 'roads' ? 'Дорогу и мост кладут сразу из сумки в любом месте.' : tabDef[0] === 'colony' ? 'Колония основывается на отмеченном месте острова (E на месте).' : `Постройки ставятся на ваших клетках: разрешение на район покупают у Эдила в Курии, клетки размечают на месте. Вкладка — это район: «Общественные» — в стенах, «При гавани» — у порта, «За стенами» — в полях. Ваших построек: ${mine}/${rk.priv}.`}</div>${list}`);
+  setHTML($('mbody'), `<div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button class="btn sm alt" data-a="demolishMode" title="Убрать дорогу, мост или свою постройку (часть материалов вернётся)">🔨 Снос</button></div><div class="muted" style="margin-bottom:8px">${tabDef[0] === 'roads' ? 'Дорогу и мост кладут сразу: ресурсы берутся из сумки и личных складов этого города.' : tabDef[0] === 'colony' ? 'Колония основывается на отмеченном месте острова (E на месте).' : `Постройки ставятся на ваших клетках: разрешение на район покупают у Эдила в Курии, клетки размечают на месте. Вкладка — это район: «Общественные» — в стенах, «При гавани» — у порта, «За стенами» — в полях. Ваших построек: ${mine}/${rk.priv}.`}</div>${list}`);
 }
 // установка постройки: призрак следует за курсором
 // перенос: частное — хозяин; общественное — эдил или префект (если обе должности свободны — любой колонист)
@@ -667,6 +707,7 @@ function demolishTarget(g) {
 export function confirmPlacing() {
   const p = S.placing; if (!p || !p.pos) return;
   if (p.demolish) { if (p.target) net({ type: 'demolish', bid: p.target.id }); return; }
+  if(p.claim&&p.cityRoad){if(p.blk)net({type:'cityRoad',city:p.claim,i:p.blk.i0,j:p.blk.j0});return;}
   if (p.claim) { if (p.blk) net({ type: 'claim', city: p.claim, i0: p.blk.i0, j0: p.blk.j0, w: p.n, h: p.n }); return; }
   if (p.move) { net({ type: 'moveBld', bid: p.move, x: p.pos.x, z: p.pos.z, ry: p.ry }); cancelPlacing(); return; }
   net({ type: 'place', bt: p.bt, x: p.pos.x, z: p.pos.z, ry: p.ry });
@@ -677,9 +718,11 @@ function updatePlacing() {
   const p = S.placing; if (!p) return;
   const g = C.groundPointAtMouse(); if (!g) return;
   if (p.claim) {
+    if(p.cityRoad)p.n=1;
     const Cy = WG.cityById(p.claim); const bs = WG.blockSnap(Cy, g.x, g.z, p.n); p.blk = bs; p.pos = g;
-    const k = bs.i0 + ':' + bs.j0 + ':' + p.n + ':' + Object.keys(S.world.plots || {}).length + ':' + JSON.stringify(S.char.permits || {});
-    if (k !== p.key) { p.key = k; drawCells(p.obj, Cy, bs.i0, bs.j0, p.n, p.n, (i, j) => claimColor(Cy, i, j)); }
+    const k = bs.i0 + ':' + bs.j0 + ':' + p.n + ':' + Object.keys(S.world.plots || {}).length + ':' + JSON.stringify(S.char.permits || {})+':'+S.blds.length;
+    if (k !== p.key) { p.key = k; drawCells(p.obj, Cy, bs.i0, bs.j0, p.n, p.n, (i,j)=>p.cityRoad?(WG.cityRoadAllowed(Cy,i,j,S.blds,S.world.plots||{})?0x6aff6a:0xff4a3a):claimColor(Cy,i,j)); }
+    if(p.cityRoad){setPrompt('Улица 4×4 м · камень ×'+BUILDINGS.via_cell.cost.stone+' · ЛКМ — проложить · Esc — выйти');return;}
     let cost = 0; for (let i = bs.i0; i < bs.i0 + p.n; i++) for (let j = bs.j0; j < bs.j0 + p.n; j++) if (!(S.world.plots || {})[`${Cy.id}:${i}:${j}`] && WG.cellFree(Cy, i, j)) cost += WG.cellPrice(Cy, i, j) || 0;
     const [ci, cj] = WG.cellOf(Cy, g.x, g.z), one = WG.cellPrice(Cy, ci, cj);
     setPrompt(`Участок ${p.n}×${p.n} · ≈${cost} ден. (клетка под курсором — ${one ?? '—'} ден.) · зелёные — по разрешению, жёлтые — нет разрешения, синие — ваши, красные — нельзя`);
@@ -731,10 +774,11 @@ function updatePlacing() {
   p.obj.position.set(g.x, (sl.lo + sl.hi) / 2, g.z); p.obj.rotation.y = p.ry;
   let ok = WG.terrainHeight(g.x, g.z) > 0.3 && (def.shore ? !!WG.shoreSnap(g.x, g.z, def.r, WG.SHORE_FRONT[p.bt]) : sl.lo > 0.2 && sl.d < Math.max(3.5, def.r * 0.4));
   if (def.road) ok = (def.bridge ? WG.bridgeRy(g.x, g.z) != null : WG.terrainHeight(g.x, g.z) > 0.5 && WG.slopeAt(g.x, g.z, Math.min(3, def.len / 2)).d < 2.6) && WG.islandAt(g.x, g.z)?.id === 'main' && !S.blds.some((b) => { if (b.id === p.move) return false; const bb = BUILDINGS[b.type], d = Math.hypot(b.x - g.x, b.z - g.z); return bb.road ? d < Math.min(bb.len, def.len) / 2 + 0.5 : d < bb.r + 1.5; });
-  else if (ok) for (const b of S.blds) if (b.id !== p.move && Math.hypot(b.x - g.x, b.z - g.z) < (BUILDINGS[b.type].road ? 1.5 : BUILDINGS[b.type].r) + def.r + 1) { ok = false; break; }
+  else if (ok) for (const b of S.blds) if (b.id !== p.move && overlaps({type:p.bt,x:g.x,z:g.z,ry:p.ry},def,b,BUILDINGS[b.type])) { ok = false; break; }
   if (def.bridge) p.obj.position.y = Math.max(1.1, WG.terrainHeight(g.x + Math.sin(p.ry) * 12, g.z + Math.cos(p.ry) * 12) + 0.15, WG.terrainHeight(g.x - Math.sin(p.ry) * 12, g.z - Math.cos(p.ry) * 12) + 0.15);
-  if (cellOk != null) ok = cellOk && (def.shore ? ok : true);
+  if (cellOk != null) ok = cellOk && ok;
   else if (ok && !def.road && !def.colony) { const L = S.char.lat; ok = def.type === 'villa' || p.bt === 'villa' || !!(L && Math.abs(g.x - L.x) < L.half && Math.abs(g.z - L.z) < L.half); }
+  if (!def.road && WG.portOverlap(g.x,g.z,def.r,S.blds.filter(b=>b.type==='portus'))) ok=false;
   if (p.ok !== ok) { p.ok = ok; p.obj.traverse((m) => { if (m.isMesh && m.material.color) m.material.color.set(ok ? 0x88ff88 : 0xff6655); }); }
 }
 
@@ -751,8 +795,8 @@ function renderBld() {
   $('mmove').classList.toggle('hidden', !canMove(b));
   if (!b.built) {
     tabs([['site', '🏗 Стройка']]);
-    const rows = Object.entries(b.cost).map(([k, n]) => `<div class="row"><span class="grow">${resName(k)}</span><span class="nm">${b.prog[k] || 0} / ${n}</span><span class="muted" style="width:120px;text-align:right">у вас ${Math.floor(c.bag[k] || 0)}${def.pub ? `, склад ${Math.floor(w.storage[k] || 0)}` : ''}</span></div>`).join('');
-    setHTML($('mbody'), `<div class="card"><div class="t">${def.desc}</div><div class="prog"><div style="width:${progOf(b) * 100}%"></div></div></div>${rows}<div style="margin-top:12px;display:flex;gap:8px"><button class="btn" data-a="deliver" data-bid="${b.id}">Вложить из сумки</button>${(def.pub || def.colony) && S.char.office ? `<button class="btn alt" data-a="deliver" data-bid="${b.id}" data-store="1">Вложить со склада колонии</button>` : (def.pub ? '<span class="muted" style="align-self:center">со склада колонии берут только должностные лица</span>' : '')}</div><div class="muted" style="margin-top:8px">За вклад в общественные здания растёт достоинство и опыт.${w.priority === b.type ? ' <b style="color:var(--gold2)">Приоритет префекта: двойное достоинство!</b>' : ''}</div>`);
+    const rows = Object.entries(b.cost).map(([k, n]) => `<div class="row"><span class="grow">${resName(k)}</span><span class="nm">${b.prog[k] || 0} / ${n}</span><span class="muted" style="width:120px;text-align:right">сумка и личные склады: ${Math.floor((c.cityResources || c.bag)[k] || 0)}${def.pub ? `, склад ${Math.floor(w.storage[k] || 0)}` : ''}</span></div>`).join('');
+    setHTML($('mbody'), `<div class="card"><div class="t">${def.desc}</div><div class="prog"><div style="width:${progOf(b) * 100}%"></div></div></div>${rows}<div style="margin-top:12px;display:flex;gap:8px"><button class="btn" data-a="deliver" data-bid="${b.id}">Вложить из сумки и личных складов</button>${(def.pub || def.colony) && S.char.office ? `<button class="btn alt" data-a="deliver" data-bid="${b.id}" data-store="1">Вложить со склада колонии</button>` : (def.pub ? '<span class="muted" style="align-self:center">со склада колонии берут только должностные лица</span>' : '')}</div><div class="muted" style="margin-top:8px">За вклад в общественные здания растёт достоинство и опыт.${w.priority === b.type ? ' <b style="color:var(--gold2)">Приоритет префекта: двойное достоинство!</b>' : ''}</div>`);
     return;
   }
   if (b.ruined || b.hp < b.maxHp * 0.98) {
@@ -762,7 +806,8 @@ function renderBld() {
     if (b.ruined) { tabs([['rep', '🔧 Ремонт']]); setHTML($('mbody'), `<div class="card"><div class="t">Здание разрушено налётчиками</div><div class="muted">Прочность ${b.hp}/${b.maxHp}. Нужен ремонт: ${costHtml(rc, c.bag)}${hasOff('aedilis') ? ' (эдил чинит бесплатно)' : ''}</div></div><button class="btn" data-a="repair" data-bid="${b.id}">Отремонтировать</button>`); return; }
   }
   const T = {
-    campus: campusPanel, curia: curiaPanel, forum: forumPanel, forum_m: forumPanel, horreum: storePanel, horreum_s: warehousePanel,
+    warehouse: warehousePanel, horreum_s: warehousePanel, supply_depot: warehousePanel, quarters: housingPanel, navalia: portPanel,
+    campus: campusPanel, curia: curiaPanel, forum: forumPanel, forum_m: forumPanel, horreum: storePanel,
     mercator: (b) => { tabs([['trade', '⚖ Скупщик']]); setHTML($('mbody'), `<div class="card"><div class="muted">Скупщик работает круглосуточно, кроме 12:00–12:40 по игровым часам. Берёт любой товар, но платит меньше: ×${D.BUYER_SELL}. В лавках торгового ряда на форуме горожане платят дороже (×${D.STALL_SELL}), но каждая лавка берёт только товары своего ряда.</div></div>` + shopHtml(MARKET_GOODS, MARKET_GEAR, true, null, { mul: D.BUYER_SELL, hours: { open: D.buyerOpen(S.serverT + (performance.now() / 1000 - S.timeAt)), from: D.BUYER_HOURS[0], to: D.BUYER_HOURS[1] } })); },
     stall: (b) => { const k = b.cls || 0, c = S.char, mine = b.owner === c.id, nMine = S.blds.filter((x) => x.type === 'stall' && x.owner === c.id && x.city === b.city).length, lim = D.stallLimit(c.rank), pr = Math.round(D.STALL_PRICE * D.derived(c).buy);
       const own = mine ? `<div class="row"><span class="grow">🏪 <b>Ваша лавка</b>: ${D.BUILDINGS.stall.rent} ден. в минуту, свои товары здесь на ${Math.round((D.STALL_OWN - 1) * 100)}% дороже, ${Math.round(D.STALL_FEE * 100)}% с продаж других.</span><button class="btn sm alt" data-a="stallSell" data-bid="${b.id}">Продать городу (${Math.round(D.STALL_PRICE * 0.6)})</button></div>`
@@ -801,7 +846,7 @@ function renderBld() {
         <h3 class="sec">Мои гладиаторы здесь</h3>` + (my.map((x) => `<div class="row"><span class="grow">🛡 <b>${esc(x.name)}</b> ${gradeTag(x)} <span class="muted">ур. ${x.glvl}</span></span><input id="gs_${x.id}" class="num" value="${x.sale || 300}"><button class="btn sm ${x.sale ? 'good' : 'alt'}" data-a="gladSale" data-sid="${x.id}">${x.sale ? 'Продаётся · изменить' : '🏷 Продать'}</button>${x.sale ? `<button class="btn sm alt" data-a="gladSale" data-sid="${x.id}" data-off="1">Снять</button>` : ''}<button class="btn sm alt" data-a="gladLudus" data-sid="${x.id}" data-on="0">Забрать</button></div>`).join('') || '<div class="muted">Пока нет.</div>')
         + (mine && other.length ? `<h3 class="sec">Чужие гладиаторы (платят вам)</h3>` + other.map((x) => `<div class="row"><span class="grow">🛡 ${esc(x.name)} <span class="muted">— ${esc(x.ownerName)}, ур. ${x.glvl}</span></span></div>`).join('') : '')
         + `<h3 class="sec">Отправить в школу</h3>` + ((S.world.slaves || []).filter((x) => !x.ludus && !x.hired).map((x) => `<div class="row"><span class="grow">${esc(x.name)} ${gradeTag(x)}</span><button class="btn sm" data-a="gladLudus" data-sid="${x.id}" data-on="1">В школу</button></div>`).join('') || '<div class="muted">Нет свободных рабов.</div>') + repairBtn(b)); },
-    vivarium: (b) => { tabs([['v', '🦁 Зверинец']]); const c = S.char; setHTML($('mbody'), `<div class="card"><div class="muted">Здесь живут ваши прирученные львы. Ловля: убейте матёрого льва на островах Сильва, Египет или Феррум, подойдите к телу и нажмите E с сетью приручителя (покупается на арене за ${D.ARENA_SHOP.tamer.ap} очков). Шанс — 50%.</div></div><h3 class="sec">Львы</h3>` + ((c.lions || []).map((l) => `<div class="row"><span class="grow">🦁 ${esc(l.name)}</span><span class="muted">выпускают на арену в Амфитеатре</span></div>`).join('') || '<div class="muted">Пока нет.</div>') + repairBtn(b)); }, amphitheatrum: arenaPanel, colonia: colonyPanel, domus: domusPanel,
+    vivarium: (b) => { tabs([['v', '🦁 Зверинец']]); const c = S.char; setHTML($('mbody'), `<div class="card"><div class="muted">Здесь живут ваши прирученные львы. Ловля: убейте матёрого льва на островах Дидима, Мелита или Феррум, подойдите к телу и нажмите E с сетью приручителя (покупается на арене за ${D.ARENA_SHOP.tamer.ap} очков). Шанс — 50%.</div></div><h3 class="sec">Львы</h3>` + ((c.lions || []).map((l) => `<div class="row"><span class="grow">🦁 ${esc(l.name)}</span><span class="muted">выпускают на арену в Амфитеатре</span></div>`).join('') || '<div class="muted">Пока нет.</div>') + repairBtn(b)); }, amphitheatrum: arenaPanel, colonia: colonyPanel, domus: domusPanel,
   }[b.type];
   MB_PRE = b.sale && b.owner && b.owner !== c.id ? `<div class="card" style="border-color:var(--gold)"><div class="row" style="border:0"><span class="grow">🏷 <b>Продаётся</b>: ${def.name} — хозяин ${esc(b.ownerName || '?')}</span><button class="btn good" data-a="bldBuy" data-bid="${b.id}" ${c.den < b.sale ? 'disabled' : ''}>Купить за ${b.sale} ден.</button></div></div>` : '';
   try {
@@ -849,10 +894,10 @@ function stablePanel(b) {
 }
 const progOf = (b) => { const tot = Object.values(b.cost).reduce((a, n) => a + n, 0), got = Object.values(b.prog || {}).reduce((a, n) => a + n, 0); return tot ? got / tot : 0; };
 const repairBtn = (b) => b.hp < b.maxHp ? `<button class="btn sm alt" data-a="repair" data-bid="${b.id}">Подлатать (${b.hp}/${b.maxHp}) · +одобрение Рима</button>${S.char.office && (BUILDINGS[b.type].pub || b.muni) ? ` <button class="btn sm alt" data-a="repair" data-bid="${b.id}" data-store="1">Подлатать со склада</button>` : ''}` : '';
-function questBoard() {
+function questBoard(source='forum',city=B()?.city||S.world.city) {
   const w = S.world, c = S.char;
   const have = new Set(c.quests.map((q) => q.id));
-  return (w.quests || []).map((q) => `<div class="row"><span class="grow"><b>${q.title}</b> <span class="muted">— ${q.desc}</span></span><span class="nm muted" style="font-size:12px">${q.reward.den} ден. · ${q.reward.xp} оп.</span><button class="btn sm" data-a="quest" data-id="${q.id}" ${have.has(q.id) ? 'disabled' : ''}>${have.has(q.id) ? 'Взято' : 'Взять'}</button></div>`).join('');
+  return `<div class="card">Очки должности в этом городе: <b>${c.officePoints?.[city]||0}</b>. Общие задания можно брать нескольким игрокам; прогресс личный. Обновление доски раз в 10 минут.</div>`+(w.quests || []).filter(q=>(q.source||'forum')===source&&(!q.city||q.city===city)).map((q) => `<div class="row"><span class="grow"><b>${q.title}</b> <span class="muted">— ${q.desc}</span></span><span class="nm muted" style="font-size:12px">${q.reward.den} ден. · ${q.reward.xp} оп. · ${q.reward.office||5} очк. должности</span><button class="btn sm" data-a="quest" data-id="${q.id}" ${have.has(q.id)||(c.doneQuests||[]).includes(q.id) ? 'disabled' : ''}>${(c.doneQuests||[]).includes(q.id)?'Выполнено':have.has(q.id)?'Взято':'Взять'}</button></div>`).join('');
 }
 // должность: щелчок — разворачивается полное описание и требования
 const offOpen = new Set();
@@ -877,11 +922,12 @@ function forumPanel(b) {
   } else if (cur.tab === 'elect') {
     const E = w.election;
     h = `<h3>Должностные лица города ${esc(w.cityName || '')} <span class="muted" style="font-size:12px">(в каждом римском городе — свои; щёлкните — откроется описание)</span></h3>${Object.keys(OFFICES).map((k) => offDetails(k, `<b class="nm">${w.offices[k] ? esc(w.offices[k].name) : '—'}</b>`)).join('')}`;
+    h+=`<div class="card">Очки должности в ${esc(w.cityName||w.city)}: <b>${c.officePoints?.[w.city]||0}</b>. Их дают поручения форума и гавани. Очки открывают выдвижение и не расходуются.</div>`;
     if (E) {
       h += `<h3 style="margin-top:12px">Идут выборы · ${fmtT(E.ends)}</h3>` + Object.entries(OFFICES).map(([k, o]) => {
         const cands = Object.entries(E.offices[k] || {});
-        const req = [o.minTrade ? `торговый оборот ${o.minTrade} ден. — сумма ваших сделок на рынке, в лавках, портах и у торговцев (у вас ${(c.stats2 && c.stats2.traded) || 0})` : '', o.minMil ? `военное звание «${D.MIL_RANKS[o.minMil].name}»` : ''].filter(Boolean).join('; ');
-        return `<div class="card"><div class="row" style="border:0"><span class="grow t">${o.icon} ${o.name}${req ? `<div class="muted" style="font-weight:400;font-size:12px">Нужно: ${req}</div>` : ''}</span><button class="btn sm" data-a="cand" data-office="${k}" ${c.rank < o.minRank ? 'disabled title="Нужно звание ' + RANKS[o.minRank].name + '"' : ''}>Выдвинуться</button></div>${cands.map(([cid, x]) => `<div class="row"><span class="grow">${esc(x.name)}</span><span class="nm">${x.votes.toFixed(1)} гол.</span><button class="btn sm ${x.mine ? 'good' : ''}" data-a="vote" data-office="${k}" data-cid="${cid}">${x.mine ? 'Ваш голос' : 'Голосовать'}</button></div>`).join('') || '<div class="muted">Кандидатов нет</div>'}</div>`;
+        const req = [`очки должности в этом городе: ${c.officePoints?.[w.city]||0} / ${o.minOfficePoints}`,o.minTrade ? `торговый оборот ${o.minTrade} ден. — сумма ваших сделок на рынке, в лавках, портах и у торговцев (у вас ${(c.stats2 && c.stats2.traded) || 0})` : '', o.minMil ? `военное звание «${D.MIL_RANKS[o.minMil].name}»` : ''].filter(Boolean).join('; ');
+        return `<div class="card"><div class="row" style="border:0"><span class="grow t">${o.icon} ${o.name}${req ? `<div class="muted" style="font-weight:400;font-size:12px">Нужно: ${req}</div>` : ''}</span><button class="btn sm" data-a="cand" data-office="${k}" ${c.rank < o.minRank || (c.officePoints?.[w.city]||0)<o.minOfficePoints ? 'disabled title="Нужны указанное звание и очки должности этого города"' : ''}>Выдвинуться</button></div>${cands.map(([cid, x]) => `<div class="row"><span class="grow">${esc(x.name)}</span><span class="nm">${x.votes.toFixed(1)} гол.</span><button class="btn sm ${x.mine ? 'good' : ''}" data-a="vote" data-office="${k}" data-cid="${cid}">${x.mine ? 'Ваш голос' : 'Голосовать'}</button></div>`).join('') || '<div class="muted">Кандидатов нет</div>'}</div>`;
       }).join('');
     } else h += `<div class="muted" style="margin-top:10px">Следующие выборы через ${fmtT(w.electionIn)}. Голос весит по званию (и красноречию).</div><button class="btn sm alt" data-a="callElection" style="margin-top:6px">Объявить досрочные выборы</button>`;
     for (const o of c.offs || []) h += ` <button class="btn sm bad" data-a="resign" data-office="${o.city}:${o.k}">Сложить: ${OFFICES[o.k].name} (${esc(o.cityName)})</button>`;
@@ -932,8 +978,9 @@ let shopSub = 'buy';
 function shopHtml(goods, gear, sellAll = true, where = null, o = {}) {
   const c = S.char, w = S.world;
   const mm = (k) => (w.market && w.market[k]) || 1;
-  const buyP = (k) => Math.round((RES[k] ? RES[k].p * 1.6 * mm(k) : GEAR[k].p) * (1 - (c.stats.cha || 0) * 0.015) * (hasOff('magister') ? 0.9 : 1));
-  const sellP = (k) => Math.round(RES[k].p * mm(k) * (1 + (c.stats.cha || 0) * 0.015) * (w.laws.open_port ? 1.1 : 1) * (hasOff('magister') ? 1.1 : 1) * (0.85 + w.favor / 333) * (where ? (PORTS[where].mult[k] || 1.1) : 1) * (o.mul || 1) * 10) / 10;
+  const context = k => ({ market:mm(k),favor:w.favor,openPort:!!w.laws.open_port,magister:hasOff('magister'),foreign:!!where,portMultiplier:where?(PORTS[where].mult[k]||1.1):1,localSale:o.mul||1 });
+  const buyP = k => purchasePrice(c,k,context(k));
+  const sellP = k => Math.round(baseSalePrice(c,k,context(k))*(o.mul||1)*10)/10;
   const buyRow = (k) => `<div class="row"><span class="grow">${resName(k)}</span><span class="nm">${buyP(k)} ден.</span><input id="b_${k}" class="num" value="10"><button class="btn sm" data-a="buy" data-k="${k}">Купить</button></div>`;
   const buy = grouped(goods, buyRow) + (gear.length ? `<div class="sgrp"><h4>⚔ Снаряжение</h4>${gear.map((k) => `<div class="row"><span class="grow itemName">${GEAR[k].name} <span class="muted">${gearStats({ k, q: 0 })}</span></span><span class="nm">${buyP(k)} ден.</span><button class="btn sm" data-a="buy" data-k="${k}" data-n="1">Купить</button></div>`).join('')}</div>` : '');
   const sk = Object.entries(c.bag).filter(([k, n]) => n >= 1 && RES[k] && (!o.only || o.only.includes(k))).map(([k]) => k);
@@ -943,8 +990,8 @@ function shopHtml(goods, gear, sellAll = true, where = null, o = {}) {
   const sw = `<div class="subtabs"><button class="btn sm ${shopSub === 'buy' ? 'good' : 'alt'}" data-a="shopSub" data-k="buy">🛒 Купить · у вас ${c.den} ден.</button><button class="btn sm ${shopSub === 'sell' ? 'good' : 'alt'}" data-a="shopSub" data-k="sell">💰 Продать${w.laws.trade_tax ? ` · налог ${LAWS.trade_tax.opts[w.laws.trade_tax]}` : ''}</button></div>`;
   return closed + sw + (shopSub === 'buy' ? `<div class="sgrid">${buy}</div>` : `<div class="sgrid">${sell}${sg ? `<div class="sgrp"><h4>⚔ Снаряжение</h4>${sg}</div>` : ''}</div>`);
 }
-const MARKET_GOODS = ['wood', 'stone', 'clay', 'wheat', 'bread', 'linen', 'calamus', 'leather', 'iron', 'arrow', 'bandage', 'pilum', 'amphora', 'meat'];
-const MARKET_GEAR = ['knife', 'gladius', 'axe', 'hasta', 'pick', 'rod', 'rod_bronze', 'rod_tuna', 'torch', 'parma', 'pileus', 'galea_bronze', 'subarmalis', 'caligae', 'ocreae'];
+const MARKET_GOODS = D.MARKET_GOODS;
+const MARKET_GEAR = D.MARKET_GEAR;
 function marketPanel(b) {
   const w = S.world, c = S.char;
   tabs([['trade', '⚖ Торговля'], ['slaves', w.laws.slavery_ban ? '👷 Работники' : '⛓ Невольничий рынок'], ['mine', `👥 Мои работники (${(w.slaves || []).length})`]]);
@@ -961,7 +1008,7 @@ function gladHtml() {
   const ups = (s) => Object.entries(D.GLAD_UP).map(([k, u]) => { const lv = s['g' + k] || 0; return lv < u.max ? `<button class="btn sm alt" data-a="gladUp" data-sid="${s.id}" data-k="${k}" title="${u.desc}">${u.name.split(' ')[0]} ${lv}→${lv + 1} (${u.ap(lv + 1)} оч.)</button>` : `<span class="tag">${u.name.split(' ')[0]} макс.</span>`; }).join('');
   const ludus = S.blds.find((b) => b.type === 'ludus' && b.owner === c.id && b.built);
   const slaves = (w.slaves || []).filter((s) => !s.hired).map((s) => { const rest = (s.rest || 0) > (S.st ? S.st.t : 0) && false; return `<div class="row"><span class="grow">${esc(s.name)} ${gradeTag(s)} <span class="muted">гладиатор ${s.glvl || 0} ур. · оружие ${s.gw || 0} · доспех ${s.ga || 0}${s.ludus ? ' · в школе' : ''}${s.gamesWon ? ` · 🏆 ${s.gamesWon}` : ''}</span></span><input id="gn_${s.id}" class="num" style="width:110px" placeholder="новое имя" maxlength="20"><button class="btn sm alt" data-a="gladName" data-sid="${s.id}" title="Дать гладиатору имя">✎</button>${ups(s)}${ludus ? (s.ludus ? `<button class="btn sm alt" data-a="gladLudus" data-sid="${s.id}" data-on="0">Из школы</button>` : `<button class="btn sm alt" data-a="gladLudus" data-sid="${s.id}" data-on="1">В школу</button>`) : ''}<button class="btn sm good" data-a="gladBout" data-sid="${s.id}" ${busy ? 'disabled' : ''}>На арену</button></div>`; }).join('') || '<div class="muted">Нет рабов. Купите у работорговца или возьмите пленника.</div>';
-  const lions = (c.lions || []).map((l) => `<div class="row"><span class="grow">🦁 ${esc(l.name)}</span><button class="btn sm good" data-a="gladBout" data-lion="${l.id}" ${busy ? 'disabled' : ''}>Выпустить на арену</button></div>`).join('') || '<div class="muted">Львов нет. Убейте матёрого льва (Сильва, Египет, Феррум) и приручите сетью — нужен свой Зверинец.</div>';
+  const lions = (c.lions || []).map((l) => `<div class="row"><span class="grow">🦁 ${esc(l.name)}</span><button class="btn sm good" data-a="gladBout" data-lion="${l.id}" ${busy ? 'disabled' : ''}>Выпустить на арену</button></div>`).join('') || '<div class="muted">Львов нет. Убейте матёрого льва (Дидима, Мелита, Феррум) и приручите сетью — нужен свой Зверинец.</div>';
   const gear = Object.entries(D.ARENA_GEAR).map(([k, u]) => { const lv = (c.arenaGear || {})[k] || 0; return `<div class="row"><span class="nm" style="width:240px">${u.name}</span><span style="width:80px;color:var(--gold2)">${'●'.repeat(lv)}<span class="muted">${'○'.repeat(u.max - lv)}</span></span><span class="grow muted">${u.desc}</span>${lv < u.max ? `<button class="btn sm" data-a="arenaGear" data-k="${k}">${u.ap(lv + 1)} оч.</button>` : '<span class="tag">макс.</span>'}</div>`; }).join('');
   const shop = Object.entries(D.ARENA_SHOP).map(([k, it]) => `<div class="row"><span class="nm" style="width:240px">${it.name} <span class="muted">(у вас ${c.tamer || 0})</span></span><span class="grow muted">${it.desc}</span><button class="btn sm" data-a="arenaBuy" data-k="${k}">${it.ap} оч.</button></div>`).join('')
     + `<div class="row"><span class="nm" style="width:240px">Школа гладиаторов</span><span class="grow muted">${BUILDINGS.ludus.desc}</span><span class="tag">${BUILDINGS.ludus.ap} оч. · стройка (B → Частные)</span></div><div class="row"><span class="nm" style="width:240px">Зверинец для львов</span><span class="grow muted">${BUILDINGS.vivarium.desc}</span><span class="tag">${BUILDINGS.vivarium.ap} оч. · стройка (B → Частные)</span></div>`;
@@ -971,7 +1018,7 @@ function gladHtml() {
 function slavesList(here) {
   const w = S.world, c = S.char;
   const my = S.blds.filter((b) => b.owner === c.id && b.built && BUILDINGS[b.type].slots);
-  return (w.slaves || []).map((s) => { const at = S.blds.find((b) => b.id === s.bld); return `<div class="row"><span class="grow">${esc(s.name)} <span class="muted">(${esc(s.origin)})</span> ${gradeTag(s)} ${traitTag(s)}${s.hungry ? ' <span class="no">голодает</span>' : ''}</span><span class="nm muted">${at ? BUILDINGS[at.type].name : s.ship ? 'лучник на корабле' : s.ludus ? 'школа гладиаторов' : 'без дела'}</span>${here ? (s.bld === here.id ? `<button class="btn sm alt" data-a="slaveHere" data-id="${s.id}" data-bid="">Снять</button>` : `<button class="btn sm" data-a="slaveHere" data-id="${s.id}" data-bid="${here.id}">Сюда</button>`) : `<select id="sa_${s.id}"><option value="">— без дела —</option>${my.map((b) => `<option value="${b.id}" ${b.id === s.bld ? 'selected' : ''}>${BUILDINGS[b.type].name}</option>`).join('')}</select><button class="btn sm" data-a="slaveAssign" data-id="${s.id}">Назначить</button>`}<button class="btn sm alt" data-a="slaveFree" data-id="${s.id}" title="Отпустить на волю (+достоинство)">🕊</button></div>`; }).join('') || '<div class="muted">У вас нет работников. Купите их на Рынке.</div>';
+  return (w.slaves || []).map((s) => { const at = S.blds.find((b) => b.id === s.bld); return `<div class="row"><span class="grow">${esc(s.name)} <span class="muted">(${esc(s.origin)})</span> ${gradeTag(s)} ${traitTag(s)}${s.hungry ? ' <span class="no">голодает</span>' : ''}${s.housed === false ? ' <span class="no">нет жилья</span>' : ''}</span><span class="nm muted">${at ? BUILDINGS[at.type].name : s.ship ? 'лучник на корабле' : s.ludus ? 'школа гладиаторов' : 'без дела'}</span>${here ? (s.bld === here.id ? `<button class="btn sm alt" data-a="slaveHere" data-id="${s.id}" data-bid="">Снять</button>` : `<button class="btn sm" data-a="slaveHere" data-id="${s.id}" data-bid="${here.id}">Сюда</button>`) : `<select id="sa_${s.id}"><option value="">— без дела —</option>${my.map((b) => `<option value="${b.id}" ${b.id === s.bld ? 'selected' : ''}>${BUILDINGS[b.type].name}</option>`).join('')}</select><button class="btn sm" data-a="slaveAssign" data-id="${s.id}">Назначить</button>`}<button class="btn sm alt" data-a="slaveFree" data-id="${s.id}" title="Отпустить на волю (+достоинство)">🕊</button></div>`; }).join('') || '<div class="muted">У вас нет работников. Купите их на Рынке.</div>';
 }
 function prodPanel(b) {
   const def = BUILDINGS[b.type], c = S.char, w = S.world, mine = b.owner === c.id;
@@ -979,7 +1026,7 @@ function prodPanel(b) {
   const store = Object.entries(b.store || {}).map(([k, n]) => `<div class="row"><span class="grow">${resName(k)}</span><b>${Math.floor(n)}</b>${mine && n >= 1 ? `<button class="btn sm" data-a="collect" data-bid="${b.id}" data-res="${k}">Забрать</button>` : ''}</div>`).join('') || '<div class="muted">Пока пусто — выработка идёт раз в минуту.</div>';
   const working = (w.slaves || []).filter((s) => s.bld === b.id).length;
   setHTML($('mbody'), `<div class="cols"><div><div class="card"><div class="t">${def.desc}</div><div class="muted">Выработка в минуту: ${Object.entries(def.prod).map(([k, n]) => `${resName(k)} ${n}`).join(', ')} × (0.3 + работники). Работников: ${working}/${def.slots}. Склад хозяйства до 160 ед.</div></div><h3>Запасы</h3>${store}${mine ? `<div style="margin-top:8px;display:flex;gap:6px"><button class="btn" data-a="collect" data-bid="${b.id}">Забрать всё в сумку</button><button class="btn alt" data-a="collect" data-bid="${b.id}" data-store="1">Сдать на склад колонии</button></div>` : '<div class="muted">Хозяйство принадлежит ' + esc(b.ownerName) + '</div>'}${repairBtn(b)}</div>
-    <div>${mine ? `<h3>Работники</h3>${slavesList(b)}` : ''}</div></div>`);
+    <div>${mine ? `<button class="btn sm alt" data-a="autoStore" data-bid="${b.id}">Доставка на личный городской склад: ${b.autoStore ? 'вкл.' : 'выкл.'}</button><h3>Работники</h3>${slavesList(b)}` : ''}</div></div>`);
 }
 function colonyPanel(b) {
   const c = S.char, mine = b.owner === c.id;
@@ -993,7 +1040,7 @@ function colonyPanel(b) {
     setHTML($('mbody'), `<div class="card"><div class="muted">У каждой колонии пять промыслов своего острова: три обычных, один редкий и один очень редкий. У каждого — своё здание, ступени 1–5, каждая дороже прежней. Выработка растёт и от работников.</div></div>${rows}`);
     return;
   }
-  setHTML($('mbody'), `<div class="cols"><div><div class="card"><div class="t">${isl.name}</div><div>${isl.desc}</div><div class="muted">Промыслы: ${list.map(([k]) => resName(k)).join(', ')}. Запасы вывозят кораблём (подведите свой корабль и погрузите) или торговым путём.</div></div><h3>Запасы колонии</h3>${store}<div style="margin-top:8px;display:flex;gap:6px"><button class="btn" data-a="colonyLoad" data-bid="${b.id}">Погрузить на мой корабль</button>${mine ? `<button class="btn alt" data-a="collect" data-bid="${b.id}">Забрать в сумку</button>` : ''}</div>${repairBtn(b)}</div><div>${mine ? `<h3>Работники</h3>${slavesList(b)}` : `<div class="muted">Основатель: ${esc(b.ownerName)}</div>`}</div></div>`);
+  setHTML($('mbody'), `<div class="cols"><div><div class="card"><div class="t">${isl.name}</div><div>${isl.desc}</div><div class="muted">Промыслы: ${list.map(([k]) => resName(k)).join(', ')}. Запасы вывозят кораблём (подведите свой корабль и погрузите) или торговым путём.</div></div><h3>Запасы колонии</h3>${store}<div style="margin-top:8px;display:flex;gap:6px"><button class="btn" data-a="colonyLoad" data-bid="${b.id}">Погрузить на мой корабль</button>${mine ? `<button class="btn alt" data-a="collect" data-bid="${b.id}">Забрать в сумку</button>` : ''}</div>${repairBtn(b)}</div><div>${mine ? `<button class="btn sm alt" data-a="autoStore" data-bid="${b.id}">Доставка на личный городской склад: ${b.autoStore ? 'вкл.' : 'выкл.'}</button><h3>Работники</h3>${slavesList(b)}` : `<div class="muted">Основатель: ${esc(b.ownerName)}</div>`}</div></div>`);
 }
 // ---------- Кампус: снаряжение учёных, изучение пойманных, прогресс исследователей ----------
 function campusPanel(b) {
@@ -1019,7 +1066,7 @@ function curiaPanel(b) {
   }
   const rows = Object.entries(D.DISTRICTS).map(([k, d]) => { const have = pm[(C && C.id) + ':' + k] || 0, k2 = (hasOff('aedilis') ? 0.8 : 1) * D.derived(c).buy, pr = Math.max(1, Math.round(d.price * D.PERMIT_K * k2));
     return `<div class="row"><span class="nm" style="width:220px"><span style="color:${d.color}">■</span> ${d.name}</span><span style="width:150px">разрешение ${pr} ден.<br><span class="muted">клетка ${Math.round(d.price * 0.7 * k2)}–${Math.round(d.price * 1.8 * k2)} ден.</span>${d.rare ? '<br><span class="muted">+ ' + Object.entries(d.rare).map(([r, v]) => `${resName(r)} ×${v}`).join(', ') + '</span>' : ''}</span><span class="muted" style="width:120px">от звания «${RANKS[d.rank].name}»</span><span class="muted" style="width:120px">доход и выработка ×${d.mul}</span><span class="grow">${have ? `<b>разрешений: ${have}</b>` : ''}</span><input id="pm_${k}" class="num" value="9"><button class="btn sm" data-a="permit" data-city="${C && C.id}" data-d="${k}" ${c.rank < d.rank ? 'disabled' : ''}>Купить</button></div>`; }).join('');
-  setHTML($('mbody'), `<div class="card"><div class="t">Эдил ${C ? C.name : ''}</div><div class="muted">Город разбит на клетки 4×4 м и на четыре района. Купите у Эдила разрешение на нужное число клеток в районе, затем разметьте участок на месте (кнопка «Разметить» есть и в окне Хозяйства K → «Владения»). Каждая клетка оплачивается при разметке по своей цене: у форума и гавани дороже, на окраине дешевле. В стенах (центр и окраина) — общественные постройки (таверна, баня, кузница, инсула, дом…), при гавани — пристань, верфь, пурпурная ферма, за стенами — сельские (ферма, конюшня, хлев…). Чем дороже район — тем быстрее производство и больше доход хозяина.</div></div>${rows}
+  setHTML($('mbody'), `<div class="card"><div class="t">Эдил ${C ? C.name : ''}</div><div class="muted">Участки 4×4 м жилого квартала находятся в четверти города справа от кардо, со стороны суши (на карте — зелёный район). Кольцо вокруг форума остаётся общественным. Купите у Эдила разрешение на нужное число клеток в районе, затем разметьте участок на месте (кнопка «Разметить» есть и в окне Хозяйства K → «Владения»). Каждая клетка оплачивается при разметке по своей цене: у форума и гавани дороже, на окраине дешевле. В стенах (центр и окраина) — общественные постройки (таверна, баня, кузница, инсула, дом…), при гавани — пристань, верфь, пурпурная ферма, за стенами — сельские (ферма, конюшня, хлев…). Чем дороже район — тем быстрее производство и больше доход хозяина.</div></div>${rows}${hasOff('aedilis')?`<div class="card"><button class="btn" data-a="roadMode" data-city="${C?.id}">🛣 Проложить улицу: 1 клетка</button><p>Камень ×${BUILDINGS.via_cell.cost.stone}. Только свободные клетки, от главной дороги. Занимать купленные участки нельзя.</p></div>`:''}
     <div class="card"><div class="stat"><span>Ваши клетки / разрешения / предел</span><span>${cells} / ${perm} / ${c.cellLimit || '?'}</span></div><div style="margin-top:6px"><button class="btn good" data-a="claimMode" data-city="${C && C.id}" ${perm ? '' : 'disabled'}>📐 Разметить участок</button> <span class="muted">колесо — размер, ЛКМ — разметить, Esc — выход</span></div></div>`);
 }
 function domusPanel(b) {
@@ -1042,6 +1089,7 @@ function tabernaPanel(b) {
 }
 function arenaPanel(b) {
   const w = S.world, c = S.char, A = S.st && S.st.ar;
+  MB_PRE+=`<div class="card"><div class="row" style="border:0"><span class="grow muted">${S.spect?.bid===b.id?'Вы сидите на трибуне. E открывает меню, вкладки и ставки доступны.':'С трибуны можно наблюдать игры и делать ставки.'}</span>${S.spect?.bid===b.id?'<button class="btn sm alt" data-a="arenaLeave">Встать и выйти с трибуны</button>':`<button class="btn sm good" data-a="arenaSit" data-bid="${b.id}">🪑 Сесть на трибуну</button>`}</div></div>`;
   tabs([['games', '🏟 Игры'], ['glad', `🛡 Гладиаторы (${c.ap || 0} оч.)`], ['duel', '⚔ Поединок']]);
   if (cur.tab === 'glad') { setHTML($('mbody'), gladHtml()); return; }
   if (cur.tab === 'games' && A && A.mode === 'games') { // Великие игры: ставки на любого гладиатора
@@ -1054,7 +1102,7 @@ function arenaPanel(b) {
     if (!A) h += `<button class="btn" data-a="arena">Открыть игры</button>${hasOff('lanista') ? ' <button class="btn alt" data-a="arena" data-grand="1">Большие игры (150 из казны, награды ×2)</button>' : ''}`;
     else if (A.st === 'prep' && !A.duel) h += `<div class="card">Сбор бойцов: ${A.t} с. Зрители, ставки: <input id="betN" class="num" value="25"> <button class="btn sm" data-a="bet" data-on="w3">Дойдут до 3-й волны (×2)</button> <button class="btn sm" data-a="bet" data-on="w5">До 5-й (×4)</button> <button class="btn sm" data-a="bet" data-on="w8">До 8-й (×8)</button></div>`;
     else h += `<div class="card">Идёт бой: волна ${A.wave}, бойцов ${A.f.length}.</div>`;
-    h += `<div class="card"><div class="row" style="border:0"><span class="grow muted">Зрители смотрят бой с трибун: на песок во время боя выходят только бойцы, а бойцы уходят с арены лишь после окончания боя. С трибуны можно уйти в любое время (E).</span><button class="btn sm good" data-a="arenaSit" data-bid="${b.id}">🪑 Сесть на трибуну</button></div></div>`;
+    h += '<div class="card muted">Во время боя на песке остаются только бойцы. Зрители могут пользоваться меню и выйти с трибуны в любое время.</div>';
     setHTML($('mbody'), h);
   } else {
     let h = '<div class="muted" style="margin-bottom:8px">Вызовите игрока у Амфитеатра на поединок (до поражения, не насмерть). Зрители ставят на победителя.</div>';
@@ -1065,17 +1113,17 @@ function arenaPanel(b) {
 }
 function portPanel(b) {
   const c = S.char, w = S.world;
-  tabs([['ships', '⚓ Верфь'], ['mine', '⛵ Мои корабли'], ['catch', '🐟 Рыбный причал'], ...(b.city === 'messana' ? [['ferry', '⛵ Переправа в Регий']] : [])]);
+  tabs([['ships', '⚓ Верфь'], ['mine', '⛵ Мои корабли'], ['catch', '🐟 Рыбный причал'],['q','🗒 Задания гавани'], ...(b.city === 'messana' ? [['ferry', '⛵ Переправа в Регий']] : [])]);
+  if(cur.tab==='q'){setHTML($('mbody'),'<p>Поручения гавани: улов, снабжение и торговля. Отдельная доска, обновление раз в 10 минут.</p>'+questBoard('harbor',b.city));return;}
   if (cur.tab === 'ferry') { setHTML($('mbody'), `<div class="card"><div class="t">Регий и Поле Марса</div><div class="muted">Напротив гавани Мессаны, на Бруттии, — гавань Регия: деревня и дом распорядителя игр. Там бьются армиями — с ботами и с игроками, за военные очки и рейтинг полководцев. По Бруттию просто гулять нельзя: туда приплывают на своём корабле или переправляются здесь.</div><div style="margin-top:8px"><button class="btn good" data-a="ferry" data-to="regium">⛵ Переправиться в Регий (${D.WAR.ferry} ден.)</button></div></div>`); return; }
+  if (cur.tab === 'catch' && c.tunaCarry){setHTML($('mbody'),`<div class="card"><h3>Свежий тунец: ${c.tunaCarry.kg} кг</h3><p>Улов принесён с баркаса. Покупатель платит ${Math.round(c.tunaCarry.kg*.9*D.derived(c).sell)} денариев.</p><button class="btn good" data-a="tunaSell" data-bid="${b.id}" ${S.ship?'disabled':''}>Продать принесённого тунца</button></div>`);return;}
   if (cur.tab === 'catch') { const fish = Object.entries(c.bag).filter(([k, n]) => RES[k] && RES[k].fish && n >= 1); const moored = w.ships.filter((s) => s.owner === c.id && s.berth && s.berth.startsWith('b' + b.id + ':')); const hold = moored.flatMap((s) => Object.entries(s.cargo || {}).filter(([k, n]) => RES[k] && RES[k].fish && n >= 1));
-    setHTML($('mbody'), `<div class="card"><div class="muted">Рыбаки гавани берут свежий улов прямо с причала — дороже скупщика (×1.15). Пришвартуйте баркас или лодку (G у руля) и сдайте рыбу из трюма или из сумки. Тунца здесь берут охотнее всего.</div></div><h3 class="sec">В сумке</h3>${fish.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Рыбы нет.</div>'}<h3 class="sec">В трюме пришвартованных кораблей</h3>${hold.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Пусто.</div>'}<div style="margin-top:8px"><button class="btn good" data-a="sellCatch" data-bid="${b.id}" ${fish.length || hold.length ? '' : 'disabled'}>Сдать весь улов</button></div>`); return; }
+    setHTML($('mbody'), `<div class="card"><div class="muted">Рыбаки гавани берут свежий улов прямо с причала — дороже скупщика (×1.15). Пришвартуйте баркас или лодку (G у руля) и сдайте рыбу из трюма или из сумки. Гарпунного тунца сначала выгрузите с баркаса (G → Корабль → Взять тунца), затем принесите сюда в руках.</div></div><h3 class="sec">В сумке</h3>${fish.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Рыбы нет.</div>'}<h3 class="sec">В трюме пришвартованных кораблей</h3>${hold.map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span></div>`).join('') || '<div class="muted">Пусто.</div>'}<div style="margin-top:8px"><button class="btn good" data-a="sellCatch" data-bid="${b.id}" ${fish.length || hold.length ? '' : 'disabled'}>Сдать весь улов</button></div>`); return; }
   if (cur.tab === 'ships') setHTML($('mbody'), Object.entries(SHIPS).map(([k, s]) => `<div class="card"><div class="row" style="border:0"><span class="grow t">${s.name}</span><span class="nm muted">скорость ${s.speed}, мест ${s.seats}, трюм ${s.cargo}, прочность ${s.hp}${s.ram ? ', таран' : ''}</span></div><div class="muted">${s.desc}</div><div class="row" style="border:0"><span class="grow" style="font-size:12px">${costHtml(s.cost, c.bag)}${s.rank ? ` · звание «${RANKS[s.rank].name}»` : ''}</span><button class="btn sm" data-a="shipBuild" data-st="${k}" ${(s.rank || 0) > c.rank ? 'disabled' : ''}>Построить</button></div></div>`).join(''));
   else setHTML($('mbody'), shipsList());
 }
-function shipsList() {
-  const c = S.char, w = S.world;
-  return (w.ships || []).filter((s) => s.owner === c.id).map((s) => `<div class="card"><div class="row" style="border:0"><span class="grow t">${esc(s.name)}</span><span class="nm">прочность ${s.hp}/${s.maxHp}</span><button class="btn sm alt" data-a="shipRepair" data-sid="${s.id}">Починить (доски)</button><button class="btn sm" data-a="unload" data-sid="${s.id}">Разгрузить на склад</button></div><div class="muted">Трюм: ${Object.entries(s.cargo).map(([k, n]) => `${resName(k)} ${Math.floor(n)}`).join(', ') || 'пусто'}</div></div>`).join('') || '<div class="muted">У вас нет кораблей. Постройте лодку на Верфи — для рыбалки и поездок на острова.</div>';
-}
+function shipsList() { return myShipsHtml(); }
+
 function renderCamp() {
   const c = S.char;
   $('mtitle').textContent = 'Лагерь колонистов';
@@ -1092,7 +1140,7 @@ function renderInst() {
   tabs([['i', '⛏ Подземелье']]);
   const cd = (c.instCd[k] || 0) - Date.now() / 1000 - (S.clockOff || 0);
   const locked = k === 'tomb' && !(S.world.flags && S.world.flags.scraps);
-  setHTML($('mbody'), `<div class="card"><div class="t">${ins.name}</div><div>${ins.desc}</div><div class="muted">Рекомендуемый уровень: ${ins.lvl} (у вас ${c.level}). Залов: ${ins.rooms}. Главарь: ${ENEMIES[ins.boss].name}. Добыча: ${Object.keys(ins.loot).map(resName).join(', ')}; шанс редкого снаряжения: ${ins.gear.map((g) => GEAR[g].name).join(', ')}.</div>${cd > 0 ? `<div class="muted">Сокровищница для вас обновится через ${fmtT(cd)} (войти можно — опыт и задания засчитаются).</div>` : ''}</div>${locked ? '<div class="card">Вход завален песком. Узнайте путь у писца Хеви на Малом Египте (сюжет).</div>' : `<button class="btn" data-a="instEnter" data-key="${k}">Спуститься${c.level < ins.lvl - 2 ? ' (опасно!)' : ''}</button>`}<div class="muted" style="margin-top:8px">Заходите группой: все, кто войдёт, пока подземелье не пройдено, окажутся вместе.</div>`);
+  setHTML($('mbody'), `<div class="card"><div class="t">${ins.name}</div><div>${ins.desc}</div><div class="muted">Рекомендуемый уровень: ${ins.lvl} (у вас ${c.level}). Залов: ${ins.rooms}. Главарь: ${ENEMIES[ins.boss].name}. Добыча: ${Object.keys(ins.loot).map(resName).join(', ')}; шанс редкого снаряжения: ${ins.gear.map((g) => GEAR[g].name).join(', ')}.</div>${cd > 0 ? `<div class="muted">Сокровищница для вас обновится через ${fmtT(cd)} (войти можно — опыт и задания засчитаются).</div>` : ''}</div>${locked ? '<div class="card">Вход завален песком. Узнайте путь у писца на Мелите (сюжет).</div>' : `<button class="btn" data-a="instEnter" data-key="${k}">Спуститься${c.level < ins.lvl - 2 ? ' (опасно!)' : ''}</button>`}<div class="muted" style="margin-top:8px">Заходите группой: все, кто войдёт, пока подземелье не пройдено, окажутся вместе.</div>`);
 }
 function renderShip() {
   const sid = S.ship || nearMyShip(); const c = S.char, w = S.world;
@@ -1122,13 +1170,20 @@ function slaveTradeHtml() {
 }
 const crateName = (k) => D.CRATES[k] ? `${'▣'.repeat(D.CRATES[k].grade)} ${D.CRATES[k].name}` : k;
 function shipCardHtml(s, full = true) {
-  const c = S.char, def = SHIPS[s.type], mine = s.owner === c.id;
-  const crates = (s.crates || []).map((k, i) => `<div class="row"><span class="grow">📦 ${crateName(k)}</span>${!c.carry ? `<button class="btn sm alt" data-a="crateUnload" data-sid="${s.id}" data-i="${i}">Взять в руки</button>` : ''}</div>`).join('') || '<div class="muted">Ящиков на борту нет.</div>';
+  const c = S.char, def = SHIPS[s.type], mine = s.owner === c.id, access = mine || (!s.owner && s.starter);
+  const pos=C.ships.get(s.id)?.obj.position, saleProblems=[];
+  if (!pos || !S.blds.some(b=>b.type==='portus'&&b.built&&!b.ruined&&!b.enemy&&Math.hypot(b.x-pos.x,b.z-pos.z)<90&&Math.hypot(b.x-S.me.x,b.z-S.me.z)<90)) saleProblems.push('Вы и корабль должны быть у одной римской гавани');
+  if (S.ship===s.id||[...C.players.values()].some(p=>p.ship===s.id)) saleProblems.push('Высадите всех пассажиров');
+  if((s.tunaHold||[]).some(Boolean)||(s.crates||[]).length||Object.values(s.cargo||{}).some(n=>n>0)) saleProblems.push('Разгрузите трюм и ящики');
+  if (s.route) saleProblems.push('Остановите торговый путь');
+  const saleDisabled=saleProblems.length?'disabled title="'+esc(saleProblems.join('. '))+'"':'';
+  const crates = (s.crates || []).map((k, i) => `<div class="row"><span class="grow">📦 ${crateName(k)}</span>${!c.carry && access ? `<button class="btn sm alt" data-a="crateUnload" data-sid="${s.id}" data-i="${i}">Взять в руки</button>` : ''}</div>`).join('') || '<div class="muted">Ящиков на борту нет.</div>';
   let html = `<div class="card"><div class="t">${esc(s.name)} <span class="muted">· ${def.name}</span></div><div class="stat"><span>Прочность</span><span>${s.hp}/${s.maxHp}</span></div><div class="stat"><span>Ящики</span><span>${(s.crates || []).length} / ${def.crates}</span></div>${s.berth ? '<div class="muted">⚓ стоит у причала</div>' : ''}</div>
-    <h3 class="sec">Ящики на борту</h3>${crates}${c.carry ? `<button class="btn sm" data-a="crateLoad" data-sid="${s.id}" style="margin-top:6px">Погрузить ящик из рук (${crateName(c.carry)})</button>` : ''}`;
+    <h3 class="sec">Ящики на борту</h3>${crates}${c.carry && access ? `<button class="btn sm" data-a="crateLoad" data-sid="${s.id}" style="margin-top:6px">Погрузить ящик из рук (${crateName(c.carry)})</button>` : ''}`;
+  if(s.type==='barca')html+=`<div class="card"><h3>Носовой гарпун и два места улова</h3><p>На борту: H — гарпун, ЛКМ — выстрел, Пробел — тянуть; отпускайте во время рывков. Для выгрузки сойдите на берег рядом с баркасом.</p>${[0,1].map(i=>`<div class="row"><span class="grow">${i===0?'Левый':'Правый'} борт: ${s.tunaHold?.[i]?`тунец ${s.tunaHold[i].kg} кг`:'свободно'}</span>${mine&&s.tunaHold?.[i]?`<button class="btn sm" data-a="tunaUnload" data-sid="${s.id}" data-slot="${i}" ${S.ship||c.tunaCarry||c.carry?'disabled':''}>Взять тунца</button>`:mine&&c.tunaCarry?`<button class="btn sm" data-a="tunaLoad" data-sid="${s.id}" data-slot="${i}">Вернуть на борт</button>`:''}</div>`).join('')}${c.tunaCarry?`<p>В руках: тунец ${c.tunaCarry.kg} кг. Несите к гавани → Рыбный причал.</p>`:''}</div>`;
   if (!mine && s.forSale) html += `<div class="row"><span class="grow">⚖ Продаётся владельцем за <b>${s.forSale}</b> ден.</span><button class="btn sm good" data-a="shipBuy" data-sid="${s.id}">Купить</button></div>`;
   if (!full || !mine) return html;
-  html += `<h3 class="sec">Продать или передать</h3><div class="row"><span class="grow muted">Риму — в римской гавани у причала: продажа за 55% стоимости материалов или безвозмездный дар (большое одобрение Рима). Другим гражданам — выставьте цену, покупатель подойдёт и купит.</span></div><div class="row"><button class="btn sm" data-a="shipRome" data-sid="${s.id}">Продать Риму</button><button class="btn sm good" data-a="shipRome" data-sid="${s.id}" data-gift="1">Подарить Республике</button><input id="sale_${s.id}" class="num" value="${s.forSale || 1000}"><button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}">${s.forSale ? 'Изменить цену' : 'Выставить на продажу'}</button>${s.forSale ? `<button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}" data-off="1">Снять</button>` : ''}</div>`;
+  html += `<h3 class="sec">Продать или передать</h3>${saleProblems.length?`<div class="muted">Для продажи: ${saleProblems.map(esc).join(' · ')}</div>`:''}<div class="row"><span class="grow muted">Риму — в римской гавани у причала: продажа за 55% стоимости материалов или безвозмездный дар (большое одобрение Рима). Другим гражданам — выставьте цену, покупатель подойдёт и купит.</span></div><div class="row"><button class="btn sm" data-a="shipRome" data-sid="${s.id}" ${saleDisabled}>Продать Риму</button><button class="btn sm good" data-a="shipRome" data-sid="${s.id}" data-gift="1" ${saleDisabled}>Подарить Республике</button><input id="sale_${s.id}" class="num" value="${s.forSale || 1000}"><button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}">${s.forSale ? 'Изменить цену' : 'Выставить на продажу'}</button>${s.forSale ? `<button class="btn sm alt" data-a="shipForSale" data-sid="${s.id}" data-off="1">Снять</button>` : ''}</div>`;
   const myArch = (S.world.slaves || []).filter((x) => x.ship === s.id), free = (S.world.slaves || []).filter((x) => !x.ship && !x.bld);
   html += `<h3 class="sec">Лучники на борту (${myArch.length}/${def.archers})</h3>` + (myArch.map((x) => `<div class="row"><span class="grow">🏹 ${esc(x.name)} <span class="muted">${esc(x.origin || '')}</span></span><button class="btn sm alt" data-a="shipArcher" data-sid="${s.id}" data-slave="${x.id}" data-on="0">Снять</button></div>`).join('') || '<div class="muted">Никого. Лучники-рабы сами стреляют по пиратам и врагам в 45 м.</div>')
     + (myArch.length < def.archers ? free.map((x) => `<div class="row"><span class="grow muted">${esc(x.name)} — свободен</span><button class="btn sm" data-a="shipArcher" data-sid="${s.id}" data-slave="${x.id}" data-on="1">Поставить лучником</button></div>`).join('') : '');
@@ -1139,14 +1194,42 @@ function shipCardHtml(s, full = true) {
 function myShipsHtml() {
   const c = S.char, w = S.world, mine = w.ships.filter((s) => s.owner === c.id), sunk = c.sunk || [];
   const live = mine.map((s) => shipCardHtml(s)).join('<hr class="sep">') || '<div class="muted">Своих кораблей нет. Их строят на Верфи в Гавани.</div>';
-  const dead = sunk.map((k) => { const def = SHIPS[k.type], cost = Object.fromEntries(Object.entries(def.cost).map(([a, n]) => [a, Math.ceil(n * 0.4)])); return `<div class="row"><span class="grow">🌊 ${esc(k.name)} <span class="muted">· ${def.name} — затонул</span></span><span class="nm" style="font-size:12px">${costHtml(cost, c.bag)}</span><button class="btn sm" data-a="shipRepair" data-sid="${k.id}">Поднять и починить</button></div>`; }).join('');
-  return `<div class="card"><div class="t">Кораблей: ${mine.length + sunk.length} / ${D.shipLimit(c)}</div><div class="muted">Ящики: лодка — 2, торговая корбита — 10, военные — 4. Лоскуты чертежа квадриремы: ${c.quadScraps || 0}/4.</div></div>${live}${dead ? `<h3 class="sec">Затонувшие (поднимают на Верфи в Гавани за 40% стоимости)</h3>${dead}` : ''}`;
+  const dead = sunk.map((k) => { const def = SHIPS[k.type], cost = Object.fromEntries(Object.entries(def.cost).map(([a, n]) => [a, Math.ceil(n * 0.4)])); return `<div class="row"><span class="grow">🌊 ${esc(k.name)} <span class="muted">· ${def.name} — затонул</span></span><span class="nm" style="font-size:12px">${costHtml(cost, c.bag)}</span><button class="btn sm" data-a="shipRepair" data-sid="${k.id}">Поднять и починить</button><button class="btn sm alt" data-a="shipScrap" data-sid="${k.id}">Списать остов</button></div>`; }).join('');
+  return `<div class="card"><div class="t">Кораблей: ${mine.length} / ${D.shipLimit(c)}</div><div class="muted">Ящики: лодка — 2, торговая корбита — 10, военные — 4. Лоскуты чертежа квадриремы: ${c.quadScraps || 0}/4.</div></div><div class="muted">Затонувшие остовы не занимают места активного флота.</div>${live}${dead ? `<h3 class="sec">Затонувшие (поднимают на Верфи в Гавани за 40% стоимости)</h3>${dead}` : ''}`;
 }
 // ---------- Торговая гильдия ----------
+$('tradeBtn').onclick=()=>open('guide');
+$('plotsBtn').onclick=()=>{S.showPlots=S.showPlots===false; $('plotsBtn').textContent='▦ Участки: '+(S.showPlots?'видны':'скрыты');};
+function warehousePanel(b) {
+  tabs([['store','📦 Ресурсы']]); const c=S.char, allowed=b.owner===c.id||b.type==='supply_depot';
+  const rows=(source,dir)=>Object.entries(source||{}).filter(([k,n])=>RES[k]&&n>=1).map(([k,n])=>`<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span>${allowed?`<button class="btn sm" data-a="warehouseMove" data-bid="${b.id}" data-res="${k}" data-dir="${dir}" data-n="10000">${dir==='in'?'Положить':'Забрать'}</button>`:''}</div>`).join('')||'<div class="muted">Пусто</div>';
+  const weight=Object.entries(b.store||{}).reduce((a,[k,n])=>a+(RES[k]?.w||1)*n,0);
+  setHTML($('mbody'),`<div class="card"><b>${BUILDINGS[b.type].name}</b><p>${BUILDINGS[b.type].desc}</p><div>Занято: ${Math.round(weight)} / ${b.capacity} веса · область: ${esc(b.scope||'')}</div>${!allowed?'<div class="no">Личные ресурсы другого владельца: операции недоступны.</div>':''}</div><div class="warehouse-cols"><div><h3>Сумка → склад</h3>${rows(c.bag,'in')}</div><div><h3>Склад → сумка</h3>${rows(b.store,'out')}</div></div>${warehouseGearHtml(b)}${repairBtn(b)}`);
+}
+function warehouseGearHtml(b) {
+  if (!['warehouse', 'horreum_s'].includes(b.type)) return '';
+  const mine=b.owner===S.char.id;
+  const rows=(items,dir)=>items.map(it=>`<div class="row"><span class="grow">${esc(GEAR[it.k]?.name||it.k)} · ${D.QUALITY[it.q||0].name}</span>${mine?`<button class="btn sm" data-a="warehouseGear" data-bid="${b.id}" data-uid="${it.uid}" data-dir="${dir}">${dir==='in'?'На склад':'В сумку'}</button>`:''}</div>`).join('')||'<div class="muted">Нет снаряжения</div>';
+  return `<h3>Снаряжение на складе (${(b.items||[]).length}/100)</h3>${rows(b.items||[],'out')}${mine?`<h3>Положить снаряжение</h3>${rows(S.char.items.filter(tradeGear),'in')}`:''}`;
+}
+function housingPanel(b) {
+  tabs([['home','🏠 Работники']]);const people=(S.world.slaves||[]).filter(s=>s.home===b.id);
+  setHTML($('mbody'),`<div class="card">${BUILDINGS.quarters.desc}<p>Заселено: ${b.residents||0} / ${b.housing}. Общая вместимость вашего жилья: ${S.char.housing}. Стартовый лагерь растёт с заслуженным званием. Жильё даёт дополнительные места для должностей и латифундии.</p></div>${people.map(s=>`<div class="row">${esc(s.name)} ${s.hungry?'· голодает':'· обеспечен едой'}</div>`).join('')||'<div class="muted">Свободные места: новые работники заселятся автоматически.</div>'}${repairBtn(b)}`);
+}
+function renderTradeGuide() {
+  $('mtitle').textContent='Первая торговая поставка';tabs([['guide','📦 Пять шагов']]);
+  const c=S.char,stage=c.tutorial||0,guild=S.blds.filter(b=>b.type==='collegium'&&b.built&&!b.ruined&&!b.enemy).sort((a,b)=>Math.hypot(a.x-S.me.x,a.z-S.me.z)-Math.hypot(b.x-S.me.x,b.z-S.me.z))[0];
+  const trader=(S.W?.traders||[]).filter(t=>!t.river).sort((a,b)=>Math.hypot(a.x-S.me.x,a.z-S.me.z)-Math.hypot(b.x-S.me.x,b.z-S.me.z))[0];
+  const marker=(p,label)=>p?`<button class="btn sm" data-a="guideTarget" data-x="${p.x}" data-z="${p.z}" data-label="${label}">Отметить: ${label} (${Math.round(Math.hypot(p.x-S.me.x,p.z-S.me.z))} м)</button>`:'';
+  const steps=[['Гильдия','Городская Торговая гильдия уже стоит в Мессане. Подойдите и нажмите E. Пользоваться городской гильдией можно без строительства своей. Дополнительная: B → Общественные. Если гильдия разрушена, внесите ресурсы на её восстановление.',marker(guild,'Торговая гильдия')],['Рецепт и ящик','В гильдии выберите припасы: любое выращенное сырьё на 40 ед. стоимости и 1 доску (например, 14 пшеницы). Нажмите «Собрать» — ящик окажется в руках.',''],['Погрузка','Подойдите к своему кораблю, откройте G → Ящики → «Погрузить ящик из рук». Для начала достаточно лодки.',''],['Доставка','Плывите к морскому торговцу. Он покупает упакованные товары. Подведите судно к причалу, откройте торговца. Если первым ящиком торгуете с Римом, зайдите в окно торговца Рима у Остии.',marker(trader,'Покупатель ящиков')],['Продажа','Продайте ящик из трюма. Продажа и завершение обучения подтвердятся в журнале сообщений.','']];
+  setHTML($('mbody'),`<div class="card">${stage>=5?'Первая поставка выполнена. Можно развивать торговые посты и автоматические маршруты.':`Выполнено шагов: ${stage}/5. У ящиков, ресурсов в трюме и запасов гильдии разные места хранения.`}</div>`+steps.map(([title,text,action],i)=>`<div class="trade-step ${stage===i?'current':''}"><b>${stage>i?'✓':i+1}. ${title}</b><p>${text}</p>${action}</div>`).join(''));
+}
+
 function guildPanel(b) {
+  if ((S.char.tutorial || 0) < 1) net({type:'tradeVisit',bid:b.id});
   const c = S.char; tabs([['g', '⚖ Торговая гильдия']]);
   const city = b.city || WG.cityAt(b.x, b.z, 30)?.id || S.world.city;
-  const warehouses = S.blds.filter(x => x.type === 'horreum_s' && x.owner === c.id && x.built && !x.ruined && !x.enemy && (x.city || WG.cityAt(x.x, x.z, 30)?.id) === city).sort((a, b) => a.id - b.id);
+  const warehouses = S.blds.filter(x => ['warehouse','horreum_s'].includes(x.type) && x.owner === c.id && x.built && !x.ruined && !x.enemy && (x.city || WG.cityAt(x.x, x.z, 30)?.id) === city).sort((a, b) => a.id - b.id);
   const stocks = [c.bag, ...warehouses.map(x => x.store || {})], items = [...c.items, ...warehouses.flatMap(x => x.items || [])];
   const rows = Object.entries(D.CRATES).map(([k, d]) => {
     const plan = planCrate(k, stocks, items), amounts = {};
@@ -1157,17 +1240,10 @@ function guildPanel(b) {
   const store = Object.entries(c.guildCrates || {}).filter(([, n]) => n > 0).map(([k, n]) => `<div class="row"><span class="grow">📦 ${crateName(k)} <b>×${n}</b></span>${!c.carry ? `<button class="btn sm" data-a="crateTake" data-k="${k}">Взять в руки</button>` : ''}</div>`).join('') || '<div class="muted">Пусто.</div>';
   setHTML($('mbody'), `<div class="card"><div class="t">Сборка из сумки и своего городского склада</div><div class="muted">Доступных складов в этом городе: ${warehouses.length}. Общий склад города и чужие склады не используются. «Ед. стоимости» — базовая стоимость товаров, без торговых бонусов. Пример первого ящика: 14 пшеницы + 1 доска или 10 винограда + 1 доска.</div><div>В руках: ${c.carry ? crateName(c.carry) : '—'}</div><div class="muted">Один ящик несут в руках. X — поставить; E у корабля — погрузить. Если руки заняты, новый ящик остаётся в гильдии.</div>${c.carry ? '<button class="btn sm alt" data-a="crateStore">Оставить ящик в гильдии</button>' : ''}</div><h3 class="sec">Собрать ящик</h3>${rows}<h3 class="sec">Мои готовые ящики в гильдии</h3>${store}${repairBtn(b)}`);
 }
-function warehousePanel(b) {
-  const c = S.char, mine = b.owner === c.id; tabs([['store', '📦 Частный склад']]);
-  const resources = Object.entries(b.store || {}).filter(([, n]) => n >= 1).map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span>${mine ? `<button class="btn sm" data-a="warehouseRes" data-bid="${b.id}" data-res="${k}" data-n="${Math.floor(n)}" data-dir="out">Забрать</button>` : ''}</div>`).join('') || '<div class="muted">Ресурсов пока нет.</div>';
-  const deposit = Object.entries(c.bag).filter(([k, n]) => RES[k] && n >= 1).map(([k, n]) => `<div class="row"><span class="grow">${resName(k)} ×${Math.floor(n)}</span><button class="btn sm alt" data-a="warehouseRes" data-bid="${b.id}" data-res="${k}" data-n="${Math.floor(n)}" data-dir="in">На склад</button></div>`).join('');
-  const gear = (b.items || []).map(it => `<div class="row"><span class="grow">${esc(GEAR[it.k]?.name || it.k)} · ${D.QUALITY[it.q || 0].name}</span>${mine ? `<button class="btn sm" data-a="warehouseGear" data-bid="${b.id}" data-uid="${it.uid}" data-dir="out">В сумку</button>` : ''}</div>`).join('') || '<div class="muted">Снаряжения нет.</div>';
-  const putGear = c.items.filter(tradeGear).map(it => `<div class="row"><span class="grow">${esc(GEAR[it.k].name)} · ${D.QUALITY[it.q || 0].name}</span><button class="btn sm alt" data-a="warehouseGear" data-bid="${b.id}" data-uid="${it.uid}" data-dir="in">На склад</button></div>`).join('');
-  setHTML($('mbody'), `<div class="card"><div class="t">${BUILDINGS.horreum_s.desc}</div><div class="muted">Вмещает до 100 предметов снаряжения. Для передачи предметов подойдите к складу. Гильдия использует ресурсы дистанционно в пределах этого города.</div></div><h3>На складе</h3>${resources}<h3>Оружие и броня</h3>${gear}${mine ? `<h3>Переложить из сумки</h3>${deposit}${putGear}` : ''}${repairBtn(b)}`);
-}
 // ---------- Окно торговца ----------
 export function openTrader(tid) { open('trader', { key: tid }); }
 function renderTrader() {
+  if ((S.char.tutorial || 0) === 3) net({type:'tradeVisit',tid:cur.key});
   const c = S.char, tr = (S.W.traders || []).find((x) => x.id === cur.key); if (!tr) { closeModal(); return; }
   $('mtitle').textContent = tr.name; tabs([['t', '⚖ Покупает ящики']]);
   const price = (k) => Math.round(D.CRATES[k].price * tr.mult * D.derived(c).sell);
@@ -1243,7 +1319,7 @@ function renderHelp() {
     ];
     setHTML($('mbody'), `<div class="sgrid">${G0.map(([t, l]) => `<div class="sgrp"><h4>${t}</h4>${l.map(([a2, b2]) => `<div class="stat"><span><b>${a2}</b></span><span>${b2}</span></div>`).join('')}</div>`).join('')}</div>`);
   }
-  else if (cur.tab === 'goal') setHTML($('mbody'), `<div class="card"><div class="t">Колония Рима на архипелаге</div><div>Мир общий и постоянный: всё, что вы построите, остаётся и после выхода из игры. Вместе развивайте город на главном острове, основывайте колонии на соседних островах, торгуйте с портами Империи, выполняйте запросы Рима и отражайте набеги варваров и Карфагена. Сюжет ведёт к тайне фараона Неферкара на Малом Египте.</div></div>
+  else if (cur.tab === 'goal') setHTML($('mbody'), `<div class="card"><div class="t">Колония Рима на архипелаге</div><div>Мир общий и постоянный: всё, что вы построите, остаётся и после выхода из игры. Вместе развивайте город на главном острове, основывайте колонии на соседних островах, торгуйте с портами Империи, выполняйте запросы Рима и отражайте набеги варваров и Карфагена. Вместе освободите и восстановите города Сицилии. Начните с арены Мессаны и похода на Тиндариду.</div></div>
     <div class="cols"><div class="card"><div class="t">Развитие персонажа</div><div class="muted">Опыт — за бой, добычу, стройку, ремесло, рыбалку, задания. Уровень даёт очки характеристик. Звание поселенца (от Колониста до Сенатора) растёт от достоинства и открывает частные хозяйства, рабов, корабли и должности.</div></div>
     <div class="card"><div class="t">Хозяйство и торговля</div><div class="muted">Стройте фермы, рощи, виноградники, гончарни — покупайте рабов на Рынке и ставьте их работать. Колонии добывают железо, мрамор, пурпур, кедр и серебро, папирус — их надо вывозить кораблём. Дороже всего роскошь продаётся в Остии.</div></div>
     <div class="card"><div class="t">Общество</div><div class="muted">На Форуме — выборы (префект, легат, магистр торговцев, эдил, ланиста), законы и доска заданий. Голос весит по званию.</div></div>
@@ -1337,6 +1413,7 @@ function drawMap(ctx, W2, H2, cx, cz, span, mini) {
   }
   if (lay('land')) for (const tm of (S.char && S.char.sci && S.char.sci.maps) || []) { ctx.strokeStyle = '#ffd24a'; ctx.lineWidth = 2; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(toX(tm.ax), toY(tm.az), Math.max(5, 25 * s), 0, 6.28); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; ctx.fillStyle = '#ffd24a'; ctx.font = 'bold 13px sans-serif'; ctx.fillText('✕ клад', toX(tm.ax), toY(tm.az) - Math.max(8, 25 * s) - 4); }
   if (lay('land') && S.char && S.char.lat) { const L = S.char.lat; ctx.strokeStyle = '#9fe0ff'; ctx.lineWidth = 2; ctx.strokeRect(toX(L.x - L.half), toY(L.z - L.half), L.half * 2 * s, L.half * 2 * s); ctx.lineWidth = 1; }
+  if(lay('land')&&!mini&&span<1100)for(const C of S.W.cities){const r=C.R-12,pts=[[12,-12],[r,-12],[r*.7,-r*.7],[12,-r]].map(([u,v])=>WG.cityPt(C,u,v));ctx.beginPath();pts.forEach(([x,z],i)=>i?ctx.lineTo(toX(x),toY(z)):ctx.moveTo(toX(x),toY(z)));ctx.closePath();ctx.fillStyle='rgba(85,190,125,.2)';ctx.fill();ctx.strokeStyle='#8ed59b';ctx.lineWidth=1;ctx.stroke();if(span<550){const[x,z]=WG.cityPt(C,C.R*.42,-C.R*.42);ctx.fillStyle='#8ed59b';ctx.font='11px sans-serif';ctx.fillText('Жилой квартал',toX(x),toY(z));}}
   // римские дороги
   ctx.strokeStyle = 'rgba(120,100,80,.85)'; ctx.lineWidth = Math.max(1.2, 5 * s);
   if (lay('cities')) for (const rd of WG.roadsList()) { ctx.beginPath(); rd.pts.forEach((p, i) => (i ? ctx.lineTo(toX(p[0]), toY(p[1])) : ctx.moveTo(toX(p[0]), toY(p[1])))); ctx.stroke(); }
@@ -1352,13 +1429,14 @@ function drawMap(ctx, W2, H2, cx, cz, span, mini) {
   for (const b of S.blds) { const d = BUILDINGS[b.type]; if (d.road ? !lay('cities') : !lay('builds')) continue; if (d.road) { ctx.save(); ctx.translate(toX(b.x), toY(b.z)); ctx.rotate(-(b.ry || 0)); ctx.fillStyle = d.bridge ? '#c8bca8' : '#8a8278'; ctx.fillRect(-Math.max(1, d.wid / 2 * s), -Math.max(1.5, (d.len / 2 + 0.2) * s), Math.max(2, d.wid * s), Math.max(3, (d.len + 0.4) * s)); ctx.restore(); continue; } ctx.fillStyle = b.ruined ? '#a33' : !b.built ? '#c9a' : d.pub ? '#f3d98b' : d.colony ? '#7fb6ff' : '#b8d890'; const r = Math.max(2, d.r * s); ctx.fillRect(toX(b.x) - r / 2, toY(b.z) - r / 2, r, r); }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `${mini ? 11 : 14}px sans-serif`;
-  if (S.W && lay('places')) for (const p of S.W.pois) { const ic = MARK[p.type]; if (!ic) continue; if (p.type === 'barb_camp') { const camp = S.W.camps.find((c) => Math.hypot(c.x - p.x, c.z - p.z) < 3); if (camp && w && w.camps[camp.id] && w.camps[camp.id].destroyedAt) continue; } drawMark(ctx, ic.sh, ic.c, toX(p.x), toY(p.z), mini ? 4.5 : 6.5); }
+  if (S.W && lay('places')) for (const p of S.W.pois) { if(p.suppressed)continue; const ic = MARK[p.type]; if (!ic) continue; if (p.type === 'barb_camp') { const camp = S.W.camps.find((c) => Math.hypot(c.x - p.x, c.z - p.z) < 3); if (camp && w && w.camps[camp.id] && w.camps[camp.id].destroyedAt) continue; } drawMark(ctx, ic.sh, ic.c, toX(p.x), toY(p.z), mini ? 4.5 : 6.5); }
   // события
   if (w && lay('events')) for (const e of w.events || []) if (e.cx != null) { ctx.strokeStyle = '#ff8a1a'; ctx.lineWidth = 3; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.arc(toX(e.cx), toY(e.cz), mini ? 9 : 13, 0, 6.28); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1; if (!mini) { ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#ffb08a'; ctx.fillText('лагерь налётчиков', toX(e.cx), toY(e.cz) - 18); } }
   if (w && lay('events')) for (const e of w.events || []) if (e.x != null) { ctx.strokeStyle = '#ff4a3a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(toX(e.x), toY(e.z), 8 + Math.sin(performance.now() / 200) * 2, 0, 6.28); ctx.stroke(); ctx.lineWidth = 1; }
   // порты
   if (!mini && lay('sea')) for (const p of Object.values(PORTS)) { ctx.fillStyle = '#bfe6ff'; ctx.fillText('Порт ' + p.name, Math.max(60, Math.min(W2 - 60, toX(p.x))), Math.max(12, Math.min(H2 - 12, toY(p.z)))); }
   // косяки
+  if(S.st?.tuna&&lay('sea'))for(const f of S.st.tuna.fish){ctx.fillStyle='#79e9ff';ctx.beginPath();ctx.arc(toX(f[1]),toY(f[2]),mini?2:4,0,6.28);ctx.fill();}
   if (S.st && lay('sea')) for (const f of S.st.f) { ctx.fillStyle = f[3] === 'tuna' ? '#9fe0ff' : 'rgba(200,240,255,0.7)'; ctx.beginPath(); ctx.arc(toX(f[1]), toY(f[2]), mini ? 2 : 3, 0, 6.28); ctx.fill(); }
   // корабли
   if (S.st && lay('sea')) { for (const sh of S.st.sh) { ctx.fillStyle = '#e8f4ff'; ctx.beginPath(); ctx.arc(toX(sh[2]), toY(sh[3]), 3.5, 0, 6.28); ctx.fill(); } for (const sh of S.st.es) { ctx.fillStyle = '#ff5a4a'; ctx.beginPath(); ctx.arc(toX(sh[2]), toY(sh[3]), 4.5, 0, 6.28); ctx.fill(); } }
@@ -1456,7 +1534,7 @@ function renderHUD() {
     ['ЛКМ', w ? (w.kind === 'rod' ? '🎣' : w.kind === 'bow' ? '🏹' : '⚔') : '👊', w ? w.name.split(' (')[0] : 'Кулаки', w && w.kind === 'bow' ? c.bag.arrow || 0 : ''],
     ['ПКМ', '🛡', c.gear.offhand ? 'Блок щитом' : 'Блок', ''],
     ['F', '↗', 'Пилум', c.bag.pilum || 0],
-    ['R', '🩹', 'Перевязка', c.bag.bandage || 0],
+    ['R', '🩹', (S.healReady||0)>performance.now()/1000 ? `Перевязка · ${Math.ceil(S.healReady-performance.now()/1000)} с` : 'Перевязка', c.bag.bandage || 0],
     ['Y', '🍞', 'Еда', food],
     ['Q', '↻', 'Перекат', ''],
   ].map(([k, ic, t, n]) => `<div class="slot"><span class="k">${k}</span>${n !== '' ? `<span class="n">${Math.floor(n)}</span>` : ''}<span class="ic">${ic}</span><span class="t">${esc(t)}</span></div>`).join(''));
@@ -1469,10 +1547,15 @@ function squadBar(ents) {
   const c = S.char, el = $('squadBar'); if (!el) return; const l = C.barSquads(); // в бою на Поле Марса — только отряды боя
   const h = l.slice(0, 8).map((q, i) => { const st = squadStats(ents, q.id), size = q.size || 1, hpPct = st.n ? Math.round(st.hp / size) : 0, SQ = D.SQUADS[q.type] || {};
     const fm = q.form === 'tight';
-    return `<div class="sqi ${S.selSquad === q.id ? 'sel' : ''} ${st.n ? '' : 'off'}" data-sq="${q.id}" title="${esc(q.name)} — ${SQ.name || ''}. Щелчок — выбрать. В виде сверху (Z): ПКМ по земле — идти, ПКМ по врагу — атаковать.">${i < 5 ? `<span class="k">${i + 1}</span>` : ''}<span class="md">${st.n ? MODE_IC[q.mode] || '' : q.homeAway ? '🏠' : '💤'}</span><div class="ic">${SQ.icon || '⚔'}</div><div class="nm">${esc(q.name)}</div><div class="cnt">👥 ${st.n}/${size}</div><div class="hb"><div style="width:${hpPct}%"></div></div>${st.n ? `<div class="sqb"><button data-sqa="attack" data-id="${q.id}" title="Атаковать ближайшего врага" class="${q.mode === 'attack' ? 'on' : ''}">⚔</button><button data-sqa="hold" data-id="${q.id}" title="Стоять — держать оборону на месте" class="${q.mode === 'hold' ? 'on' : ''}">🛡</button><button data-sqa="form" data-id="${q.id}" data-f="${fm ? 'line' : 'tight'}" title="${fm ? 'Строй плечом к плечу (вкл.) — разомкнуть' : 'Сомкнуть строй плечом к плечу'}" class="${fm ? 'on' : ''}">▦</button><button data-sqa="follow" data-id="${q.id}" title="За мной" class="${q.mode === 'follow' ? 'on' : ''}">👣</button><button data-home="${q.id}" title="Отправить домой">🏠</button></div>` : ''}</div>`; }).join('');
+    return `<div class="sqi ${(S.selectedSquads || [S.selSquad]).includes(q.id) ? 'sel' : ''} ${st.n ? '' : 'off'}" data-sq="${q.id}" title="${esc(q.name)} — ${SQ.name || ''}. Щелчок — выбрать. В виде сверху (Z): ПКМ по земле — идти, ПКМ по врагу — атаковать.">${i < 5 ? `<span class="k">${i + 1}</span>` : ''}<span class="md">${st.n ? MODE_IC[q.mode] || '' : q.homeAway ? '🏠' : '💤'}</span><div class="ic">${SQ.icon || '⚔'}</div><div class="nm">${esc(q.name)}</div><div class="cnt">👥 ${st.n}/${size}</div><div class="hb"><div style="width:${Math.min(100,hpPct)}%"></div></div><div class="details">${Math.round(hpPct)}% HP${q.stats ? ` · ⚔ ${Math.round(q.stats.damage)} · ◈ ${Math.round(q.stats.armor)}<br>Дальность ${q.stats.range} · ход ${q.stats.speed.toFixed(1)}` : ''}</div>${st.n ? `<div class="sqb"><button data-sqa="attack" data-id="${q.id}" title="Атаковать ближайшего врага" class="${q.mode === 'attack' ? 'on' : ''}">⚔</button><button data-sqa="hold" data-id="${q.id}" title="Стоять — держать оборону на месте" class="${q.mode === 'hold' ? 'on' : ''}">🛡</button><button data-sqa="form" data-id="${q.id}" data-f="${fm ? 'line' : 'tight'}" title="${fm ? 'Строй плечом к плечу (вкл.) — разомкнуть' : 'Сомкнуть строй плечом к плечу'}" class="${fm ? 'on' : ''}">▦</button><button data-sqa="follow" data-id="${q.id}" title="За мной" class="${q.mode === 'follow' ? 'on' : ''}">👣</button><button data-home="${q.id}" title="Отправить домой">🏠</button></div>` : ''}</div>`; }).join('');
   setHTML(el, h);
 }
-$('squadBar') && $('squadBar').addEventListener('click', (e) => { const sa = e.target.closest('[data-sqa]'); if (sa) { const id = Number(sa.dataset.id); S.selSquad = id; if (sa.dataset.sqa === 'form') net({ type: 'squadOrder', id, form: sa.dataset.f }); else net({ type: 'squadOrder', id, mode: sa.dataset.sqa }); e.stopPropagation(); return; } const hb = e.target.closest('[data-home]'); if (hb) { net({ type: 'squadHome', id: Number(hb.dataset.home) }); e.stopPropagation(); return; } const b = e.target.closest('[data-sq]'); if (!b) return; S.selSquad = Number(b.dataset.sq); });
+export function refreshSquadSelection() {
+  for(const card of $('squadBar')?.querySelectorAll('[data-sq]') || []) card.classList.toggle('sel',(S.selectedSquads || []).includes(Number(card.dataset.sq)));
+}
+function squadBarAction(e) { const sa = e.target.closest('[data-sqa]'); if (sa) { const id = Number(sa.dataset.id); if (!(S.selectedSquads || [S.selSquad]).includes(id)) C.chooseSquad(id); if (sa.dataset.sqa === 'form') net({ type: 'squadOrder', id, form: sa.dataset.f }); else net({ type: 'squadOrder', id, mode: sa.dataset.sqa }); e.stopPropagation(); return; } const hb = e.target.closest('[data-home]'); if (hb) { net({ type: 'squadHome', id: Number(hb.dataset.home) }); e.stopPropagation(); return; } const b = e.target.closest('[data-sq]'); if (!b) return; C.chooseSquad(Number(b.dataset.sq), e.shiftKey || e.ctrlKey); }
+$('squadBar')?.addEventListener('pointerdown',e=>{if(e.button!==0)return; e.preventDefault(); e.stopPropagation(); squadBarAction(e);});
+$('squadBar')?.addEventListener('click',e=>{e.stopPropagation(); if(e.detail===0)squadBarAction(e);});
 export function frame(dt, t, ents) {
   fishTick(dt);
   updatePlacing();

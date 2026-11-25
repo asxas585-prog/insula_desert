@@ -68,8 +68,8 @@ export function makeLabel(text, color = '#fff', opt = {}) {
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false, transparent: true, toneMapped: false, fog: false }));
-  sp.layers.set(LABEL_LAYER);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: !!opt.occluded, depthWrite: false, transparent: true, toneMapped: false, fog: !!opt.occluded }));
+  sp.layers.set(opt.occluded ? 0 : LABEL_LAYER);
   sp.scale.set(w / 52 * 0.45, 0.45, 1);
   sp.renderOrder = 10;
   return sp;

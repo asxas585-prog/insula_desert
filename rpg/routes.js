@@ -1,3 +1,5 @@
+import { localOffices } from './access.js';
+import { privateStores } from './logistics.js';
 import { inHarborZone } from './harbors.js';
 import { planCrate, applyCratePlan } from '../public/rpg/crates.js';
 // Торговые пути: заказы ящиков в латифундии/колонии → склад торгового поста → морские пути (свои корабли)
@@ -11,13 +13,15 @@ const say = (p, text, kind = 'warn') => send(p, { type: 'log', text, kind });
 const B = (id) => G.W.buildings.find((b) => b.id === id);
 const sayChar = (cid, text, kind = 'info') => { for (const p of G.players.values()) if (p.char && p.char.id === cid) send(p, { type: 'log', text, kind }); };
 export const WAGON = { price: 160, crates: 4, speed: 3.6 }, GUARD_PAY = 6;
-export const routeLimit = (c) => 1 + Math.floor(rankOf(c) / 2) + (hasOffice(c, 'magister') ? 2 : 0) + (officesOf(c).length ? 1 : 0);
+export const routeLimit = (c) => 1 + Math.floor(rankOf(c) / 2) + (hasOffice(c, 'magister') ? 2 : 0) + (localOffices(c, [...G.players.values()].find(p=>p.char?.id===c.id) || c).length ? 1 : 0);
 const routes = () => (G.W.routes = G.W.routes || []);
 const isPost = (b, kind) => b && b.built && (kind ? b.type === (kind === 'sea' ? 'emporium' : 'statio') : b.type === 'emporium' || b.type === 'statio');
 // источник товаров для заказа: колония (её склад) или латифундия (склады построек владельца вокруг виллы)
 function sources(b) {
   if (b.type === 'colonia') return [b];
-  const own = b.owner; return G.W.buildings.filter((x) => x.owner === own && x.built && x.store && Math.hypot(x.x - b.x, x.z - b.z) < 140);
+  const own = b.owner, nearby = G.W.buildings.filter(x => x.owner === own && x.built && x.store && Math.hypot(x.x-b.x,x.z-b.z) < 140);
+  const stores = G.chars[own] ? privateStores(G.chars[own],b) : [];
+  return [...new Map([...nearby,...stores].map(x=>[x.id,x])).values()];
 }
 // ---------- Заказы на ящики: работники собирают их и раз в минуту складывают на склад поста ----------
 export function orderMsg(p, m) {
@@ -123,7 +127,8 @@ export function routeMsg(p, m) {
     const r = R.find((x) => x.id === m.rid && x.owner === c.id); if (!r) return;
     if (m.type === 'routeDel') { stopRoute(r); G.W.routes = R.filter((x) => x !== r); say(p, 'Путь закрыт.', 'info'); }
     else if (m.type === 'routeShip') { // назначить/снять корабль
-      const s = G.W.ships.find((x) => x.id === m.sid && x.owner === c.id); if (!s || r.kind !== 'sea') return;
+      const s = G.W.ships.find((x) => x.id === m.sid && x.owner === c.id);
+      if(s&&(s.tunaHold||[]).some(Boolean))return say(p,'Сначала выгрузите тунца с баркаса.'); if (!s || r.kind !== 'sea') return;
       if (m.on) { if (s.route && s.route !== r.id) return say(p, 'Корабль уже на другом пути.'); if ([...G.players.values()].some((q) => q.ship === s.id)) return say(p, 'Сначала сойдите с корабля.'); if (!r.ships.includes(s.id)) r.ships.push(s.id); }
       else { r.ships = r.ships.filter((x) => x !== s.id); if (s.route === r.id) { s.route = null; s.speed = 0; } }
     } else if (m.type === 'routeWagons') { const n = Math.max(1, Math.min(6, m.n | 0)); if (n > r.wagons) { const cost = (n - r.wagons) * WAGON.price; if (c.den < cost) return say(p, `Повозки стоят ${WAGON.price} ден. за штуку.`); c.den -= cost; book(c, 'Расход: повозки торгового пути', -cost); } r.wagons = n; }
@@ -133,18 +138,19 @@ export function routeMsg(p, m) {
   }
   p.dirtyChar = true; G.dirtyWorld = true;
 }
-function stopRoute(r) { for (const sid of r.ships) { const s = G.W.ships.find((x) => x.id === sid); if (s && s.route === r.id) { s.route = null; s.speed = 0; } } G.convoys.delete(r.id); }
+function stopRoute(r) { const convoy = G.convoys.get(r.id) || r.transit; if (convoy?.load?.length) { const post = B(r.post); if (post) { post.crates ||= {}; for (const k of convoy.load) post.crates[k] = (post.crates[k] || 0) + 1; } else { const owner = G.chars[r.owner]; if (owner) { owner.guildCrates ||= {}; for (const k of convoy.load) owner.guildCrates[k] = (owner.guildCrates[k] || 0) + 1; } } } delete r.transit; for (const sid of r.ships) { const s = G.W.ships.find((x) => x.id === sid); if (s && s.route === r.id) { s.route = null; s.speed = 0; } } G.convoys.delete(r.id); }
 // ---------- Движение обозов и кораблей ----------
 G.convoys = G.convoys || new Map(); // id пути → {x,z,ry,i,dir,state,load,t}
 const capOf = (r) => r.kind === 'sea' ? r.ships.reduce((a, sid) => { const s = G.W.ships.find((x) => x.id === sid); return a + (s ? (SHIPS[s.type].ram ? 0 : SHIPS[s.type].crates) : 0); }, 0) : r.wagons * WAGON.crates;
-const guardsOf = (r) => r.kind === 'sea' ? r.ships.filter((sid) => { const s = G.W.ships.find((x) => x.id === sid); return s && SHIPS[s.type].ram; }).length * 3 + G.W.slaves.filter((x) => x.ship && r.ships.includes(x.ship)).length * 0.5 : r.guards;
+const guardsOf = (r) => r.guardsUnpaid ? 0 : r.kind === 'sea' ? r.ships.filter((sid) => { const s = G.W.ships.find((x) => x.id === sid); return s && SHIPS[s.type].ram; }).length * 3 + G.W.slaves.filter((x) => x.ship && r.ships.includes(x.ship)).length * 0.5 : r.guards;
 function routeTick(dt) {
   const t = now();
   for (const r of routes()) {
     if (!r.on) continue;
-    const post = B(r.post); if (!post || !post.built) { r.on = false; continue; }
+    const post = B(r.post); if (!post || !post.built || post.ruined) { stopRoute(r); r.on = false; continue; }
     let v = G.convoys.get(r.id);
-    if (!v) { v = { x: r.path[0][0], z: r.path[0][1], ry: 0, i: 0, dir: 1, state: 'load', load: [], t: t, kind: r.kind, owner: r.owner, rid: r.id }; G.convoys.set(r.id, v); }
+    if (!v) { v = r.transit || { x: r.path[0][0], z: r.path[0][1], ry: 0, i: 0, dir: 1, state: 'load', load: [], t: t, kind: r.kind, owner: r.owner, rid: r.id }; G.convoys.set(r.id, v); r.transit = v; }
+    r.transit = v;
     if (v.state === 'load') {
       if (t < v.t) continue;
       const cap = capOf(r); if (!cap) { v.t = t + 10; continue; }
@@ -152,11 +158,12 @@ function routeTick(dt) {
       for (const k of Object.keys(post.crates)) while (v.load.length < cap && post.crates[k] > 0 && (!r.cargo || r.cargo === k)) { post.crates[k]--; v.load.push(k); }
       for (const k of Object.keys(post.crates)) if (!post.crates[k]) delete post.crates[k];
       if (!v.load.length) { v.t = t + 15; continue; }
-      if (r.kind === 'land' && r.guards) { const ow = G.chars[r.owner]; const pay = r.guards * GUARD_PAY; if (ow && ow.den >= pay) { ow.den -= pay; book(ow, 'Расход: охрана караванов', -pay); } else r.guardsUnpaid = true; }
+      if (r.kind === 'land' && r.guards) { const ow = G.chars[r.owner]; const pay = r.guards * GUARD_PAY; if (ow && ow.den >= pay) { r.guardsUnpaid = false; ow.den -= pay; book(ow, 'Расход: охрана караванов', -pay); } else r.guardsUnpaid = true; }
       v.state = 'go'; v.dir = 1; v.i = 0; v.risk = false; G.dirtyBld = true;
     }
     if (v.state === 'go' || v.state === 'back') {
-      const sp = (r.kind === 'sea' ? 7.5 : WAGON.speed) * dt;
+      const fleetSpeed = r.kind === 'sea' ? Math.min(...r.ships.map(id => G.W.ships.find(s => s.id === id)).filter(Boolean).map(s => SHIPS[s.type].speed * (1 + .08 * (s.up?.sail || 0))), 12) * .85 : WAGON.speed;
+      const sp = fleetSpeed * dt;
       const nxt = r.path[v.i + v.dir];
       if (!nxt) { if (v.state === 'go') arrive(r, v); else { v.state = 'load'; v.t = t + 5; } continue; }
       const dx = nxt[0] - v.x, dz = nxt[1] - v.z, d = Math.hypot(dx, dz);
@@ -187,7 +194,7 @@ function arrive(r, v) {
     total += pr;
     if (dst.rome) { G.W.romeSent = G.W.romeSent || {}; G.W.romeSent[k] = (G.W.romeSent[k] || 0) + 1; ow.dig = (ow.dig || 0) + CRATES[k].grade * 2; }
   }
-  if (ow) { ow.den += total; ow.stats2 = ow.stats2 || {}; ow.stats2.traded = (ow.stats2.traded || 0) + total; }
+  if (ow) { ow.den += total; book(ow, 'Доход: торговый путь', total); ow.stats2 = ow.stats2 || {}; ow.stats2.traded = (ow.stats2.traded || 0) + total; }
   r.trips++; r.earned += total;
   if (v.load.length) sayChar(r.owner, `⚖ ${r.kind === 'sea' ? 'Корабли' : 'Караван'} продали ${v.load.length} ящ. в «${r.destName}» за ${total} ден.`, 'good');
   if (dst && dst.rome) storyCheck();

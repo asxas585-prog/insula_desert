@@ -1,22 +1,27 @@
+import { hasCityOffice, cityOf, localOffices } from './access.js';
+import * as NAV from './nav.js';
 // Военное дело: отряды из вольных людей (пехота, конница, лучники, артиллерия), телохранитель,
 // приказы (за мной / стоять / идти в точку), строй «стеной» или «врассыпную», улучшения, военные звания.
 import { G, D, WG, now, dist, rand, randi, nid, send, log, hasAll, payAll, rankOf, hasOffice, officesOf, addRes, book } from './state.js';
 import { spawnMob, grantXp, grantDig } from './combat.js';
+import { createTroop } from './troops.js';
+import { troopStats, troopLevel, squadSize, formationWorld } from '../public/rpg/rules.js';
 
 const { SQUADS, SQUAD_UP, ENEMIES } = D;
 const say = (p, text, kind = 'warn') => send(p, { type: 'log', text, kind });
 const praetorium = (c) => G.W.buildings.find((b) => b.owner === c.id && b.type === 'praetorium' && b.built);
 export const milRank = (c) => D.milIdx(c.milPts || 0);
 // сколько отрядов можно держать: военное звание + гражданское звание + должность легата
-export const squadLimit = (c) => (praetorium(c) ? Math.max(1, D.MIL_RANKS[milRank(c)].squads + Math.max(0, rankOf(c) - 2) + (hasOffice(c, 'legatus') ? 2 : 0)) : 1); // без Претория — только один отряд наёмников
-const sqSize = (sq) => sq.slaves ? sq.slaves.length : SQUADS[sq.type].n + ((sq.up && sq.up.drill) || 0);
-const officeOf = (c) => officesOf(c)[0] || null;
+export const squadLimit = (c) => (praetorium(c) ? Math.max(1, D.MIL_RANKS[milRank(c)].squads + Math.max(0, rankOf(c) - 2) + (hasCityOffice(c, 'legatus', cityOf(praetorium(c))) ? 2 : 0)) : 1); // без Претория — только один отряд наёмников
+const sqSize = squadSize;
+const officeOf = c => localOffices(c, plOf(c.id) || c)[0] || null;
 const homeOf = (c) => G.W.buildings.find((b) => b.id === c.home && b.owner === c.id) || G.W.buildings.find((b) => b.owner === c.id && (b.type === 'villa' || b.type === 'domus' || b.type === 'insula') && b.built);
 const plOf = (cid) => [...G.players.values()].find((q) => q.char && q.char.id === cid);
 const aliveOf = (ids) => (ids || []).filter((id) => { const m = G.mobs.get(id); return m && m.hp > 0; });
 
 export function armyMsg(p, m) {
   const c = p.char; c.squads = c.squads || [];
+  for (const sq of c.squads) if (!sq.war) reconcileSquad(c, sq);
   if (m.type === 'squadRecruit') {
     const S = SQUADS[m.k]; if (!S) return;
     const ars = G.W.buildings.find((b) => b.type === 'armamentarium' && b.built && !b.enemy && dist(p, b) < 25);
@@ -40,7 +45,7 @@ export function armyMsg(p, m) {
     else say(p, `⚔ Набран отряд: ${S.name}${fromSlaves ? ' (из ваших рабов)' : ''}. Вызовите его в окне «Военное дело» (U).`, 'good');
   } else if (m.type === 'guardHire') {
     if (c.guard) return say(p, 'Телохранитель у вас уже есть.');
-    if (!officeOf(c)) return say(p, 'Телохранителя дают только должностным лицам (префект, эдил, легат, сенатор и др.).');
+    if (!localOffices(c, p).length) return say(p, 'Телохранителя дают только должностным лицам (префект, эдил, легат, сенатор и др.).');
     const ar = G.W.buildings.find((b) => b.type === 'armamentarium' && b.built && !b.enemy && dist(p, b) < 25);
     if (!ar) return say(p, 'Телохранителя нанимают в Арсенале города.');
     if (c.den < D.GUARD_PRICE) return say(p, `Нужно ${D.GUARD_PRICE} денариев (первый день службы).`);
@@ -56,10 +61,15 @@ export function armyMsg(p, m) {
     say(p, `🛡 Телохранитель: ${{ follow: 'идёт за вами', hold: 'стоит на месте', home: 'охраняет дом', bld: 'охраняет постройку' }[g.mode]}.`, 'info');
   } else {
     const sq = c.squads.find((x) => x.id === m.id); if (!sq) return;
-    if (m.type === 'squadUp') {
+    if (m.type === 'squadReinforce') {
+      if (!nearMilitary(p, c)) return say(p, 'Пополнение — у своего Претория или в Арсенале.');
+      if (sq.slaves || !(sq.replacements > 0)) return;
+      if (!payReplacements(p, sq)) return; dismiss(sq); spawnSquad(p, sq);
+    } else if (m.type === 'squadUp') {
       const U = SQUAD_UP[m.k]; if (!U) return; sq.up = sq.up || {}; const lv = sq.up[m.k] || 0; if (lv >= U.max) return;
       const cost = U.cost(lv + 1), den = U.den(lv + 1);
       if (c.den < den || !hasAll(c, cost)) return say(p, `Нужно ${den} ден. и ` + Object.entries(cost).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '));
+      if (sq.slaves && m.k === 'drill') { const free = G.W.slaves.find(x => x.owner === c.id && !x.bld && !x.ship && !x.squad && !x.ludus && !x.hired); if (!free) return say(p, 'Для выучки нужен ещё один свободный работник в отряд.'); free.squad = sq.id; sq.slaves.push(free.id); }
       c.den -= den; payAll(c, cost); sq.up[m.k] = lv + 1; dismiss(sq);
       say(p, `⚔ ${sq.name}: ${U.name} — ступень ${lv + 1}.`, 'good');
     } else if (m.type === 'squadOut') {
@@ -67,7 +77,7 @@ export function armyMsg(p, m) {
       if (p.inst) return say(p, 'Здесь отряд не пройдёт.');
       if (sq.homeAway && !nearMilitary(p, c)) return say(p, `${sq.name} отправлен домой — призвать его снова можно у своего Претория, в Казармах или в Арсенале города.`);
       sq.homeAway = false;
-      sq.mode = 'follow'; spawnSquad(p, sq);
+      if (!payReplacements(p, sq)) return; sq.mode = 'follow'; spawnSquad(p, sq);
       say(p, `⚔ ${sq.name} вышел на поле. Значок — над поясом: 1–5 выбрать, 0 — отменить приказы, Z — вид сверху (ПКМ — приказ).`, 'good');
     } else if (m.type === 'squadIn' || m.type === 'squadHome') { // домой: отряд уходит сам; снова призвать — у военных зданий
       if (!aliveOf(sq.live).length) { sq.homeAway = true; return; }
@@ -76,6 +86,7 @@ export function armyMsg(p, m) {
       say(p, `🏠 ${sq.name} уходит домой. Призвать снова — у своего Претория, в Казармах или в Арсенале.`, 'info');
     }
     else if (m.type === 'squadOrder') {
+      if (m.mode === 'move') { if (![m.x,m.z].every(Number.isFinite) || Math.abs(m.x)>=D.CFG.world || Math.abs(m.z)>=D.CFG.world) return; const n=aliveOf(sq.live).length||sqSize(sq); for(let i=0;i<n;i++){ const pt=formationWorld(i,n,sq.form,Math.max(2,Math.min(12,m.columns|0||6)),m.x,m.z,Number.isFinite(m.ry)?m.ry:0); if ((WG.terrainHeight(pt.x,pt.z)<.2 && WG.deckHeight(pt.x,pt.z,G.W.buildings)==null) || !NAV.free(pt.x,pt.z)) return say(p,'Здесь не поместится строй: мешает вода или постройка.'); } }
       if (m.mode === 'follow' || m.mode === 'hold' || m.mode === 'move' || m.mode === 'attack') sq.mode = m.mode;
       if (sq.mode === 'attack') {
         let t = m.tgt != null ? G.mobs.get(Number(m.tgt)) : null;
@@ -85,7 +96,7 @@ export function armyMsg(p, m) {
       else sq.tgt = null;
       if (m.form === 'line' || m.form === 'loose' || m.form === 'tight') sq.form = m.form;
       if (sq.mode === 'hold') sq.pt = { x: sq.pt && m.mode !== 'hold' ? sq.pt.x : avgPos(sq).x, z: sq.pt && m.mode !== 'hold' ? sq.pt.z : avgPos(sq).z, ry: p.ry };
-      if (sq.mode === 'move' && isFinite(m.x) && isFinite(m.z)) sq.pt = { x: Number(m.x), z: Number(m.z), ry: Math.atan2(Number(m.x) - p.x, Number(m.z) - p.z) };
+      if (sq.mode === 'move' && Number.isFinite(m.x) && Number.isFinite(m.z) && Math.abs(m.x) < D.CFG.world && Math.abs(m.z) < D.CFG.world) { sq.pt = { x: m.x, z: m.z, ry: Number.isFinite(m.ry) ? m.ry : Math.atan2(m.x - p.x, m.z - p.z) }; sq.columns = Math.max(2, Math.min(12, m.columns | 0 || sq.columns || 6)); }
     } else if (m.type === 'squadDisband') { disband(c, sq); say(p, 'Отряд распущен.', 'info'); }
   }
   p.dirtyChar = true;
@@ -97,19 +108,29 @@ const nearMilitary = (p, c) => { const pr = praetorium(c); if (pr && dist(p, pr)
 function isFoe(t, c) { if (t.team) { const pl = plOf(c.id); return !!(pl && pl.war && t.war === pl.war.lid && t.team !== pl.war.team); } if (t.squad) return false; return ['barbarian', 'pirate', 'punic', 'robber', 'beast', 'syr'].includes(t.faction) || (t.def && t.def.faction !== 'rome' && t.def.faction !== 'prey'); }
 function avgPos(sq) { const l = aliveOf(sq.live).map((id) => G.mobs.get(id)); if (!l.length) return { x: 0, z: 0 }; return { x: l.reduce((a, m) => a + m.x, 0) / l.length, z: l.reduce((a, m) => a + m.z, 0) / l.length }; }
 function spawnSquad(p, sq) {
-  const S = SQUADS[sq.type], up = sq.up || {}, n = sqSize(sq), lvl = Math.max(1, Math.min(30, p.char.level + (sq.lvl - 1)));
-  sq.live = [];
+  const n = sqSize(sq), level = troopLevel(p.char, sq); sq.live = [];
   for (let i = 0; i < n; i++) {
-    const a = p.ry + Math.PI + (i - n / 2) * 0.25, x = p.x + Math.sin(a) * 6, z = p.z + Math.cos(a) * 6;
-    const m = spawnMob(S.unit, WG.terrainHeight(x, z) > 0.3 ? x : p.x, WG.terrainHeight(x, z) > 0.3 ? z : p.z, { lvl, leash: 30, src: { kind: 'squad', owner: p.char.id, sq: sq.id } });
-    if (!m) continue;
-    const sl = sq.slaves && G.W.slaves.find((x) => x.id === sq.slaves[i]), T = (sl && D.SLAVE_TRAITS[sl.trait]) || {};
-    m.hp = m.maxHp = Math.round(m.maxHp * (1 + 0.12 * (up.arm || 0)) * (S.hpK || 1) * (T.hp || 1)); m.armor *= 1 + 0.12 * (up.arm || 0); m.dmg *= (1 + 0.1 * (up.wpn || 0)) * (S.dmgK || 1) * (T.glad || 1) * (sq.type === 'arch' ? T.arch || 1 : 1); m.speed *= 1 + 0.05 * (up.drill || 0);
-    m.squad = { owner: p.char.id, sq: sq.id, slot: i, n }; m.gname = `${p.char.name}: ${sq.name}`;
+    const slot = formationWorld(i, n, sq.form, sq.columns, p.x - Math.sin(p.ry) * 6, p.z - Math.cos(p.ry) * 6, p.ry);
+    const sl = sq.slaves && G.W.slaves.find(x => x.id === sq.slaves[i]);
+    const m = createTroop(sq.type, WG.terrainHeight(slot.x, slot.z) > .3 ? slot.x : p.x, WG.terrainHeight(slot.x, slot.z) > .3 ? slot.z : p.z,
+      { level, up: sq.up, trait: sl?.trait, src: { kind: 'squad', owner: p.char.id, sq: sq.id } });
+    m.squad = { owner: p.char.id, sq: sq.id, slot: i, n }; m.slaveId = sl?.id; m.gname = `${p.char.name}: ${sq.name}`;
     sq.live.push(m.id);
   }
 }
+
+function reconcileSquad(c, sq) {
+  const previous = sq.live || [], alive = aliveOf(previous), dead = previous.map(id => G.mobs.get(id)).filter(m => m && m.hp <= 0);
+  const lost = dead.length;
+  if (lost && sq.slaves) { const ids = new Set(dead.map(m => m.slaveId)); sq.slaves = sq.slaves.filter(id => !ids.has(id)); G.W.slaves = G.W.slaves.filter(sl => !ids.has(sl.id)); G.dirtyWorld = true; }
+  if (lost) { sq.lost = (sq.lost || 0) + lost; if (!sq.slaves) sq.replacements = (sq.replacements || 0) + lost; }
+  sq.live = alive;
+  alive.forEach((id, slot) => { const mob = G.mobs.get(id); if (mob.squad) { mob.squad.slot = slot; mob.squad.n = alive.length; } });
+  return lost;
+}
 function disband(c, sq) { dismiss(sq); for (const s of G.W.slaves) if (s.squad === sq.id) s.squad = null; G.dirtyWorld = true; c.squads = c.squads.filter((x) => x !== sq); }
+const replacementCost = sq => Math.ceil((sq.replacements || 0) * SQUADS[sq.type].price / Math.max(1, SQUADS[sq.type].n) * .25);
+function payReplacements(p, sq) { const cost = replacementCost(sq); if (p.char.den < cost) { say(p, `Пополнение отряда: ${cost} ден.`); return false; } if (cost) { p.char.den -= cost; book(p.char, 'Пополнение войска', -cost); } sq.replacements = 0; return true; }
 function dismiss(sq) { for (const id of sq.live || []) G.mobs.delete(id); sq.live = []; }
 // куда стремится воин отряда (если не в бою): место в строю
 export function squadSlot(m) {
@@ -135,18 +156,15 @@ export function squadSlot(m) {
     else { if (!sq.pt) return null; ax = sq.pt.x; az = sq.pt.z; ry = sq.pt.ry || 0; }
   }
   // каждый отряд — своей группой: места в общем строю рядом (по порядку отрядов), лучники и артиллерия — позади
-  { const order = (c.squads || []).filter((x) => (x.live || []).length && x.mode === sq.mode && (sq.mode === 'follow' || (x.pt && sq.pt && Math.hypot(x.pt.x - sq.pt.x, x.pt.z - sq.pt.z) < 25)));
+  if (sq.mode === 'follow') { const order = (c.squads || []).filter((x) => (x.live || []).length && x.mode === sq.mode && (sq.mode === 'follow' || (x.pt && sq.pt && Math.hypot(x.pt.x - sq.pt.x, x.pt.z - sq.pt.z) < 25)));
     const k = Math.max(0, order.indexOf(sq)), back = ['arch', 'art'].includes(sq.type) ? 9 : 0, side = k === 0 ? 0 : (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 16;
     if (order.length > 1 || back) { ax += side * Math.cos(ry) - (back + (sq.mode === 'follow' ? 2 : 0)) * Math.sin(ry); az += -side * Math.sin(ry) - (back + (sq.mode === 'follow' ? 2 : 0)) * Math.cos(ry); } }
-  const i = m.squad.slot, n = m.squad.n;
-  if (sq.form === 'line' || sq.form === 'tight') { // стеной: ряд по 6; «плечом к плечу» — сомкнутый строй, ряд по 8 вплотную
-    const T = sq.form === 'tight', per = T ? 8 : 6, row = Math.floor(i / per), col = i % per, w = Math.min(per, n - row * per), lx = (col - (w - 1) / 2) * (T ? 1.15 : 2.2), lz = -row * (T ? 1.3 : 2.4) - (SQUADS[sq.type].unit === 'rom_arch' ? 4 : 0);
-    return { x: ax + lx * Math.cos(ry) + lz * Math.sin(ry), z: az - lx * Math.sin(ry) + lz * Math.cos(ry), sq, focus };
-  }
-  const a = i * 2.399 + m.id, r = 3 + (i % 4) * 2.6; // врассыпную
-  return { x: ax + Math.cos(a) * r, z: az + Math.sin(a) * r, sq, focus };
+  const pos = formationWorld(m.squad.slot, m.squad.n, sq.form, sq.columns, ax, az, ry);
+  return { ...pos, sq, focus };
+
 }
 // тик: телохранители, возвращение павших, опыт отрядов
+const armyViews = new WeakMap();
 let acc = 0;
 export function armyTick(dt) {
   acc += dt; if (acc < 1) return; acc = 0;
@@ -167,9 +185,8 @@ export function armyTick(dt) {
     }
     for (const sq of [...(c.squads || [])]) {
       if (sq.war) continue; // отряды Поля Марса живут только на время боя
-      const before = (sq.live || []).length; sq.live = aliveOf(sq.live); const lost = before - sq.live.length;
-      if (lost > 0 && sq.slaves) { for (let k = 0; k < lost && sq.slaves.length; k++) { const sid = sq.slaves.pop(); G.W.slaves = G.W.slaves.filter((x) => x.id !== sid); } G.dirtyWorld = true; } // павший воин-раб потерян
-      if (lost > 0) { sq.lost += lost; if (!sq.live.length) send(p, { type: 'log', text: `⚔ ${sq.name} разбит и отступил в преторий. Его можно снова вызвать.`, kind: 'warn' }); p.dirtyChar = true; }
+      const lost = reconcileSquad(c, sq);
+      if (lost > 0) { if (!sq.live.length) send(p, { type: 'log', text: `⚔ ${sq.name} разбит и отступил в преторий. Его можно снова вызвать.`, kind: 'warn' }); p.dirtyChar = true; }
       if (sq.slaves && !sq.slaves.length) { disband(c, sq); send(p, { type: 'log', text: `⚔ ${sq.name}: все рабы-воины пали.`, kind: 'warn' }); continue; }
       if (sq.merc) { // наёмники: плата раз в минуту, уходят через 3 дня или без платы
         if (now() >= sq.payAt) { const S = SQUADS[sq.type]; sq.payAt = now() + 60; if (c.den >= S.upkeep) { c.den -= S.upkeep; book(c, 'Наёмники', -S.upkeep); } else { disband(c, sq); send(p, { type: 'log', text: '💰 Нечем платить — наёмники ушли.', kind: 'warn' }); p.dirtyChar = true; continue; } p.dirtyChar = true; }
@@ -178,10 +195,12 @@ export function armyTick(dt) {
       if (p.ship && sq.live.length && sq.mode !== 'home' && sq.mode !== 'attack' && sq.mode !== 'hold') { // вместе с хозяином — на корабль (не больше двух отрядов, лучники-рабы — сверх того)
         if ((c.squads || []).filter((x) => x.aboard === p.ship).length >= D.SHIP_SQUADS) { const a = avgPos(sq); sq.mode = 'hold'; sq.pt = { x: a.x, z: a.z, ry: 0 }; send(p, { type: 'log', text: `⚓ На корабле места только для ${D.SHIP_SQUADS} отрядов — ${sq.name} ждёт на берегу.`, kind: 'warn' }); continue; }
         dismiss(sq); sq.aboard = p.ship; G.dirtyWorld = true; continue; }
-      if (!p.ship && sq.aboard && !sq.live.length && !p.inst && p.alive) { sq.aboard = null; sq.mode = 'follow'; spawnSquad(p, sq); G.dirtyWorld = true; continue; } // и вместе на берег
+      if (!p.ship && sq.aboard && !sq.live.length && !p.inst && p.alive) { sq.aboard = null; if (!payReplacements(p, sq)) return; sq.mode = 'follow'; spawnSquad(p, sq); G.dirtyWorld = true; continue; } // и вместе на берег
       if (sq.mode === 'home' && sq.live.length && (now() - (sq.homeAt || 0) > 25 || (sq.pt && Math.hypot(avgPos(sq).x - sq.pt.x, avgPos(sq).z - sq.pt.z) < 12))) { dismiss(sq); sq.mode = 'follow'; continue; } // дошли до дома (или скрылись из виду)
       if (sq.live.length && (p.inst || Math.hypot(avgPos(sq).x - p.x, avgPos(sq).z - p.z) > 500)) dismiss(sq);
     }
+    const signature=JSON.stringify((c.squads||[]).map(sq=>[sq.id,sq.mode,sq.form,sq.columns,aliveOf(sq.live).length,sq.lvl,sq.replacements]));
+    if(armyViews.get(c)!==signature){armyViews.set(c,signature);p.dirtyChar=true;}
   }
 }
 // убийство врага воином отряда: опыт отряду, военные очки хозяину
@@ -204,11 +223,11 @@ export function squadKill(byMob, dead) {
   if (p) p.dirtyChar = true;
 }
 // ---------- Дозорные города: покупает и улучшает легат в Арсенале; при набеге бегут навстречу врагу ----------
-export function watchState(cid) { const W = G.W; W.watch = W.watch || {}; return (W.watch[cid] = W.watch[cid] || { n: 0, lvl: 0, live: [] }); }
+export function watchState(cid) { const W = G.W; W.watch = W.watch || {}; return (W.watch[cid] = W.watch[cid] || { n: 2, lvl: 0, live: [] }); }
 export function watchMsg(p, m) {
   const c = p.char, ar = G.W.buildings.find((b) => b.type === 'armamentarium' && b.built && !b.enemy && dist(p, b) < 30);
   if (!ar) return say(p, 'Дозорных нанимают в Арсенале римского города.');
-  if (!hasOffice(c, 'legatus')) return say(p, 'Дозорными распоряжается легат.');
+  if (!hasCityOffice(c, 'legatus', cityOf(ar))) return say(p, 'Дозорными распоряжается легат.');
   const st = watchState(ar.city || 'messana'), W = G.W, WT = D.WATCH;
   if (m.type === 'watchBuy') {
     if (st.n >= WT.max) return say(p, `Дозорных уже ${WT.max} — больше город не прокормит.`);
@@ -220,15 +239,37 @@ export function watchMsg(p, m) {
   }
   G.dirtyWorld = true; p.dirtyChar = true;
 }
+function guardSpot(C, ar, index = 0) {
+  for (let r = 10; r <= 35; r += 4) for (let i = 0; i < 12; i++) {
+    const a = i * Math.PI / 6 + index * .3, x = ar.x + Math.sin(a) * r, z = ar.z + Math.cos(a) * r;
+    if (Math.hypot(x - C.x, z - C.z) < C.R - 3 && WG.terrainHeight(x, z) > .5 && NAV.free(x, z)) return { x, z };
+  }
+  return { x: C.x + 5 + index * 2, z: C.z + 13 };
+}
 export function watchTick() {
   for (const C of G.world.cities) {
-    const cs = G.W.cityState && G.W.cityState[C.id]; if (!cs || cs.owner !== 'rome') continue;
-    const st = watchState(C.id); st.live = (st.live || []).filter((id) => { const m = G.mobs.get(id); return m && m.hp > 0; });
+    const cs = G.W.cityState?.[C.id]; if (!cs || cs.owner !== 'rome') continue;
+    const ar = G.W.buildings.find(b => b.type === 'armamentarium' && b.city === C.id && b.built && !b.ruined && !b.enemy); if (!ar) continue;
+    const forum = G.W.buildings.find(b => ['forum', 'forum_m'].includes(b.type) && b.city === C.id) || C;
+    const st = watchState(C.id); st.n = Math.max(2, st.n);
+    st.live = (st.live || []).filter(id => G.mobs.get(id)?.hp > 0);
     if (st.live.length < st.n) {
-      const ar = G.W.buildings.find((b) => b.type === 'armamentarium' && b.city === C.id && b.built) || { x: C.x, z: C.z };
-      const m = spawnMob('legionary', ar.x + rand(-5, 5), ar.z + rand(-5, 5), { lvl: 5 + st.lvl * 2, leash: 9999, src: { kind: 'watch', city: C.id, onDeath: () => { const s2 = watchState(C.id); s2.n = Math.max(0, s2.n - 1); log(`🛡 Дозорный ${C.name} пал. Легат может нанять нового в Арсенале.`, 'bad'); G.dirtyWorld = true; } } });
-      if (m) { m.hp = m.maxHp = Math.round(m.maxHp * (1 + D.WATCH.hpK * st.lvl)); m.dmg *= 1 + D.WATCH.dmgK * st.lvl; m.watch = { city: C.id, x: C.x, z: C.z, R: C.R }; m.def = { ...m.def, aggro: 70, name: 'Дозорный' }; st.live.push(m.id); }
+      const index = st.live.length, pt = guardSpot(C, ar, index);
+      const m = spawnMob('legionary', pt.x, pt.z, { lvl: 5 + st.lvl * 2, leash: C.R * 2, src: { kind: 'watch', city: C.id,
+        onDeath: () => { st.n = Math.max(2, st.n - 1); G.dirtyWorld = true; } } });
+      m.hp = m.maxHp = Math.round(m.maxHp * (1 + D.WATCH.hpK * st.lvl)); m.dmg *= 1 + D.WATCH.dmgK * st.lvl;
+      m.def = { ...m.def, aggro: C.R * 2, name: index < 2 ? 'Страж форума' : 'Городской стражник' };
+      st.live.push(m.id);
     }
+    st.recallAt ||= now() + 600;
+    const recall = now() >= st.recallAt;
+    st.live.forEach((id, index) => {
+      const m = G.mobs.get(id); if (!m) return;
+      m.watch = { city: C.id, x: C.x, z: C.z, R: C.R, forum: index < 2, fx: forum.x, fz: forum.z, fr: Math.max(16, (D.BUILDINGS[forum.type]?.r || 12) + 8) };
+      if (recall || dist(m, C) > C.R - 2) { const pt = guardSpot(C, ar, index); m.x = pt.x; m.z = pt.z; m.home = { ...pt }; m.target = null; m.patrol = null; m.nav = null; m.returning = false; m.state = 'idle'; }
+    });
+    if (recall) { st.recallAt = now() + 600; G.dirtyWorld = true; }
   }
 }
-export const armyOf = (c) => ({ freeSlaves: G.W.slaves.filter((x) => x.owner === c.id && !x.bld && !x.ludus && !x.ship && !x.squad && !x.hired).length, squads: (c.squads || []).map((s) => ({ ...s, live: aliveOf(s.live).length, size: sqSize(s), left: s.until ? Math.max(0, Math.round(s.until - now())) : null })), limit: squadLimit(c), milPts: c.milPts || 0, mil: milRank(c), guard: c.guard ? { out: c.guard.out, mode: c.guard.mode || 'follow', bid: c.guard.bid || null, pay: c.guard.payAt ? Math.max(0, Math.round(c.guard.payAt - now())) : null, alive: !!(c.guard.id && G.mobs.get(c.guard.id)) } : null, office: officeOf(c), praetorium: !!praetorium(c) });
+
+export const armyOf = (c) => ({ freeSlaves: G.W.slaves.filter((x) => x.owner === c.id && !x.bld && !x.ludus && !x.ship && !x.squad && !x.hired).length, squads: (c.squads || []).map((s) => ({ ...s, stats: troopStats(s.type, troopLevel(c, s), s.up), replacementCost: replacementCost(s), live: aliveOf(s.live).length, size: sqSize(s), left: s.until ? Math.max(0, Math.round(s.until - now())) : null })), limit: squadLimit(c), milPts: c.milPts || 0, mil: milRank(c), guard: c.guard ? { out: c.guard.out, mode: c.guard.mode || 'follow', bid: c.guard.bid || null, pay: c.guard.payAt ? Math.max(0, Math.round(c.guard.payAt - now())) : null, alive: !!(c.guard.id && G.mobs.get(c.guard.id)) } : null, office: officeOf(c), praetorium: !!praetorium(c) });

@@ -1,5 +1,8 @@
 // Insula Deserta: Империя — архипелаг: рельеф и генерация мира (одинаково на сервере и клиенте)
-import { ANCIENT_RUINS, ISLANDS, INSTANCES, CFG, CITIES, BUILDINGS, CELL, RESEARCH, DISTRICTS } from './data.js';
+import {buildRoadbeds} from './roadbed.js';
+import {junctionPolygon} from './junctions.js';
+import { overlaps, cellOverlaps } from './footprints.js';
+import { ANCIENT_RUINS, ISLANDS, INSTANCES, CFG, CITIES, BUILDINGS, CELL, RESEARCH, DISTRICTS, cellsOf } from './data.js';
 
 export function makeRng(seed) {
   let s = (seed >>> 0) || 1;
@@ -181,6 +184,9 @@ export const SEA_ROCKS = [
 export const rockAt = (x, z, pad = 0) => SEA_ROCKS.find((r) => Math.abs(x - r.x) < r.r + pad && Math.abs(z - r.z) < r.r + pad && Math.hypot(x - r.x, z - r.z) < r.r + pad);
 const ISL = ISLANDS.map((i, k) => ({ ...i, k, seedOff: k * 97.3 }));
 export const islandById = (id) => ISL.find((i) => i.id === id);
+let ROADBEDS=null;
+let WRECK_DECKS=[];
+let MESSANA_CLEAR=[];
 let FLATS = []; // {x,z,r,h} — выровненные площадки (лагеря, колонии, входы)
 
 const PEAK = { med: 26, rock: 34, beach: 9, forest: 22, desert: 14 };
@@ -246,7 +252,8 @@ export function terrainHeight(x, z) {
     const fr = f.fall || f.r * 1.6;
     if (d < fr) { let k = 1 - smoothstep(f.r, fr, d); if (f.fall) k *= smoothstep(-1.6, 0.6, h); h = h * (1 - k) + f.h * k; }
   }
-  return h;
+  if(h>CITY_H&&sdfBase(x,z)>10){for(const a of MESSANA_CLEAR){const k=1-smoothstep(a.r,a.r+55,Math.hypot(x-a.x,z-a.z));h=Math.min(h,h*(1-k)+CITY_H*k);}}
+  return ROADBEDS?ROADBEDS.terrain(x,z,h):h;
 }
 // приют новоприбывших и причал стартовой лодки — в Мессане
 const _ms = CITY_LIST[0];
@@ -298,13 +305,28 @@ export function rostraAt(x, z, blds) {
   }
   return null;
 }
-let STREETS = [];
+let STREETS = [], JUNCTIONS = [];
 // абордаж: палубы двух сцепленных кораблей и мостик между ними — по ним ходят как по земле
 let BOARD_DECKS = []; export function setBoardDecks(l) { BOARD_DECKS = l || []; }
+export function wreckDecks(){return WRECK_DECKS;}
+export function nearWreck(x,z,pad=8){return WRECK_DECKS.some(d=>Math.hypot(x-d.x,z-d.z)<pad);}
+export function wreckDeckAt(x,z){return WRECK_DECKS.find(d=>inRect(x,z,d.x,d.z,d.ry,[-d.hw,d.hw,-d.hl,d.hl,d.y]))||null;}
+function setupWreckDecks(W){
+ WRECK_DECKS=[];
+ for(const p of W.pois){if(!['shipwreck','sea_wreck'].includes(p.type))continue;const sea=p.type==='sea_wreck',c=Math.cos(p.ry),s=Math.sin(p.ry),sl=sea?null:slopeAt(p.x,p.z,p.r*.6),base=sea?0:Math.max(0,terrainHeight(p.x,p.z));
+  const d={id:p.id,x:p.x+(sea?8.8*c+1.3*s:0),z:p.z+(sea?-8.8*s+1.3*c:0),ry:p.ry+(sea?.35:0),hw:1.8,hl:5,y:sea?1.7:base+.7,base,sea};WRECK_DECKS.push(d);p.wreckDeck=d;
+  const chest=W.chests.filter(ch=>sea?ch.sea:!ch.sea&&['wreck','ornate'].includes(ch.kind)).filter(ch=>Math.hypot(ch.x-p.x,ch.z-p.z)<(sea?20:5)).sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0];
+  if(chest){chest.wreck=p.id;chest.x=d.x+Math.sin(d.ry)*2;chest.z=d.z+Math.cos(d.ry)*2;chest.y=d.y;}
+ }
+}
 export function deckHeight(x, z, blds) {
-  let y = null;
+  let y = wreckDeckAt(x,z)?.y??null;
   for (const r of BOARD_DECKS) { const dx = x - r.x, dz = z - r.z, R = r.hw + r.hl; if (Math.abs(dx) > R || Math.abs(dz) > R) continue; const c = Math.cos(r.ry), s = Math.sin(r.ry), lx = dx * c - dz * s, lz = dx * s + dz * c; if (Math.abs(lx) <= r.hw && Math.abs(lz) <= r.hl && (y == null || r.y > y)) y = r.y; }
   for (const st of STREETS) { if (x < st.box[0] || x > st.box[1] || z < st.box[2] || z > st.box[3]) continue; if (segDist(x, z, st.pts[0], st.pts[1]) < st.w / 2) { y = terrainHeight(x, z) + 0.12; break; } }
+  for(const j of JUNCTIONS){
+    if(Math.abs(x-j.x)>14||Math.abs(z-j.z)>14)continue;
+    if(j.polygon.every((a,i)=>{const b=j.polygon[(i+1)%j.polygon.length];return(b[0]-a[0])*(z-a[1])-(b[1]-a[1])*(x-a[0])>=-1e-7;}))y=Math.max(y??-Infinity,terrainHeight(j.x,j.z)+.14);
+  }
   if (Math.abs(x - PIER.x) < 25 && Math.abs(z - PIER.z) < 25 && inRect(x, z, PIER.x, PIER.z, PIER.ry, PIER_DECK)) y = PIER_DECK[4];
   for (const t of TRADERS) if (Math.abs(x - t.x) < 25 && Math.abs(z - t.z) < 25) for (const R of TRADER_DECKS) if (inRect(x, z, t.x, t.z, t.ry, R)) { if (y == null || R[4] > y) y = R[4]; }
   for (const b of STATIC_BRIDGES) if (Math.abs(x - b.x) < 16 && Math.abs(z - b.z) < 16 && inRect(x, z, b.x, b.z, b.ry, PONS_DECK)) { const dx = x - b.x, dz = z - b.z, lz = dx * Math.sin(b.ry) + dz * Math.cos(b.ry); const yy = bridgeDeckY(b) + ponsLift(lz); if (y == null || yy > y) y = yy; }
@@ -399,6 +421,7 @@ function genCities(W, rnd, addPoi) {
     const W2L = (x, z) => cityLocal(c, x, z);
     const free = (u, v, r, inside = true) => {
       const [x, z] = cityPt(c, u, v);
+      if (u > 0 && v < 0) return false;
       if (inside && Math.hypot(u, v) + r > c.R - 7) return false;
       if (inside && v + r * 0.6 > coastV - 3 && !c.inland) return false;
       if (Math.abs(u) < r + 5 && v < coastV) return false; // кардо
@@ -427,8 +450,17 @@ function genCities(W, rnd, addPoi) {
       if (c.id === 'messana') { const row = k < 4 ? -1 : 1, i = k % 4; put('stall', -12.75 + i * 8.5, row * 6.5, c.ry + (row < 0 ? 0 : Math.PI), { cls: k }); }
       else { const side = k % 2 ? 1 : -1, i = k >> 1, v = (c.inland ? -1 : 1) * (Fr + 6 + i * 7); put('stall', side * 9, v, c.ry + side * Math.PI / 2 + (side > 0 ? Math.PI : 0), { cls: k }); }
     }
-    for (const [type, fu, fv] of CITY_SLOTS) { if (c.id === 'tyndaris' && type === 'theatrum') continue; place(type, fu * c.R, fv * c.R); }
-    if (c.id === 'messana') place('campus', 0.45 * c.R, 0.3 * c.R);
+    const avenue=(type)=>{
+      const r=BUILDINGS[type].r;
+      for(const inside of [true,false])for(let d=Fr+r+8;d<c.R+150;d+=4)for(const side of [-1,1])for(const axis of ['cardo','decumanus']){
+        const rawU=axis==='cardo'?-(r+7):side*d,rawV=axis==='cardo'?side*d:r+7;
+        const [rx,rz]=cityPt(c,rawU,rawV),snap=blockSnap(c,rx,rz,cellsOf(type)),[u,v]=cityLocal(c,snap.x,snap.z);
+        if(!free(u,v,r,inside))continue;
+        return put(type,u,v,c.ry+(axis==='cardo'?Math.PI/2:Math.PI),{lane:true,avenue:true});
+      }
+      return place(type,-c.R*.6,c.R*.3,false);
+    };
+
     if (!c.inland) {
       // гавань у самой воды: причалы уходят в море
       const [hx, hz] = cityPt(c, 0, -3, true), sp0 = shoreSnap(hx, hz, 20, SHORE_FRONT.portus);
@@ -436,11 +468,14 @@ function genCities(W, rnd, addPoi) {
       let sp = null; if (sp0) { const [u0, v0] = cityLocal(c, sp0.x, sp0.z); const [qx, qz] = cityPt(c, 0, v0); sp = { x: qx, z: qz, ry: c.ry }; }
       if (sp) { C.layout.push({ type: 'portus', x: Math.round(sp.x * 10) / 10, z: Math.round(sp.z * 10) / 10, ry: Math.round(sp.ry * 100) / 100 }); for (const ox of [-26, 0, 26]) { occ.push({ x: sp.x + Math.cos(sp.ry) * ox, z: sp.z - Math.sin(sp.ry) * ox, r: 22 }); occ.push({ x: sp.x + Math.cos(sp.ry) * ox + Math.sin(sp.ry) * 30, z: sp.z - Math.sin(sp.ry) * ox + Math.cos(sp.ry) * 30, r: 22 }); } C.portusV = cityLocal(c, sp.x, sp.z)[1]; }
       // невольничий рынок — у гавани, но не вплотную к причалам
-      place('servile', 0.42 * c.R, coastV - 24);
+
       // маяк на конце мола
       const m = MOLES.find((q) => q.city === c.id);
       if (m) { const a = m.pts[m.pts.length - 2], b = m.pts[m.pts.length - 1], ry = Math.atan2(b[0] - a[0], b[1] - a[1]); C.layout.push({ type: 'pharos', x: Math.round(b[0] * 10) / 10, z: Math.round(b[1] * 10) / 10, ry: Math.round(ry * 100) / 100, mole: true }); }
     }
+    for(const [type] of CITY_SLOTS) { if(c.id==='tyndaris'&&type==='theatrum')continue; avenue(type); }
+    if(c.id==='messana')avenue('campus');
+    if(!c.inland)avenue('servile');
     // ворота: концы декуманус и кардо (со стороны суши)
     for (const [du, dv] of [[1, 0], [-1, 0], [0, -1]]) { const [gx, gz] = cityPt(c, du * c.R, dv * c.R), a = Math.atan2(gx - c.x, gz - c.z); if (terrainHeight(gx, gz) > 1 && terrainHeight(gx + Math.sin(a) * 14, gz + Math.cos(a) * 14) > 1) C.gates.push({ x: gx, z: gz, a }); }
     if (c.inland) { const [gx, gz] = cityPt(c, 0, c.R); C.gates.push({ x: gx, z: gz, a: Math.atan2(gx - c.x, gz - c.z) }); }
@@ -493,6 +528,30 @@ function genCities(W, rnd, addPoi) {
     C.streets.push({ w: 8, pts: [cityPt(c, 0, -c.R - 4), cityPt(c, 0, cardoEnd)] });
     C.streets.push({ w: 8, pts: [cityPt(c, -c.R - 4, 0), cityPt(c, c.R + 4, 0)] });
     // переулки: от входа каждого здания к ближайшей главной улице
+    // New civic buildings follow the same cell grid as player construction.
+    avenue('collegium');
+    if(C.id==='messana'){
+      const arena=C.layout.find(b=>b.type==='amphitheatrum'),gate=C.gates.reduce((a,b)=>a.z>b.z?a:b);
+      // The amphitheatre gates lie on local X, not on the facade's usual +Z axis.
+      if(arena&&gate){arena.ry=Math.atan2(gate.x-arena.x,gate.z-arena.z)-Math.PI/2;
+        const entrance=[arena.x+Math.cos(arena.ry)*45.2,arena.z-Math.sin(arena.ry)*45.2];
+        C.streets.push({w:8,pts:[[gate.x,gate.z],entrance],arenaApproach:true});arena.entrance={x:entrance[0],z:entrance[1]};
+      }
+      const guild=C.layout.find(b=>b.type==='collegium'),port=C.layout.find(b=>b.type==='portus');
+      if(guild&&port){let best=null,score=Infinity;const n=cellsOf('collegium'),r=BUILDINGS.collegium.r;
+        for(let i=-30;i<=30;i++)for(let j=-30;j<=30;j++){
+          const [x,z]=cityPt(C,(i+n/2)*CELL,(j+n/2)*CELL),d=Math.hypot(x-port.x,z-port.z);
+          if(d>=score||Math.hypot(x-C.x,z-C.z)>C.R-12)continue;
+          const[u,v]=cityLocal(C,x,z);if(Math.abs(u)<r+6||Math.abs(v)<r+6)continue;
+          if(terrainHeight(x,z)<1.2||slopeAt(x,z,r*.8).d>3||portOverlap(x,z,r,[port]))continue;
+          if(C.layout.some(b=>b!==guild&&Math.hypot(x-b.x,z-b.z)<r+(BUILDINGS[b.type]?.r||4)+3))continue;
+          best={x,z,ry:C.ry+Math.PI};score=d;
+        }
+        if(best)Object.assign(guild,best,{guildRelocated:true,avenue:false});
+      }
+    }
+    extendCivicAvenues(C);
+
     for (const L of C.layout) {
       if (!L.lane) continue;
       const r = BUILDINGS[L.type].r, fx = Math.sin(L.ry), fz = Math.cos(L.ry);
@@ -520,7 +579,11 @@ function genCities(W, rnd, addPoi) {
   }
   W.roads = genRoads(W);
   setMuniFootprints(W.cities);
-  STREETS = W.cities.flatMap((C) => C.streets.map((st) => { const [a, b] = st.pts; return { pts: st.pts, w: st.w, box: [Math.min(a[0], b[0]) - st.w, Math.max(a[0], b[0]) + st.w, Math.min(a[1], b[1]) - st.w, Math.max(a[1], b[1]) + st.w] }; }));
+  syncStreetCache(W.cities);
+}
+function syncStreetCache(cities) {
+  JUNCTIONS=cities.flatMap(c=>c.junctions||[]);
+  STREETS = cities.flatMap((C) => C.streets.map((st) => { const [a, b] = st.pts; return { pts: st.pts, w: st.w, box: [Math.min(a[0], b[0]) - st.w, Math.max(a[0], b[0]) + st.w, Math.min(a[1], b[1]) - st.w, Math.max(a[1], b[1]) + st.w] }; }));
 }
 // ---------- Римские дороги между городами (поиск пути по рельефу; мосты через реки) ----------
 const ROAD_LINKS = [['messana', 'tyndaris'], ['tyndaris', 'panormus'], ['panormus', 'hybla'], ['hybla', 'syracusae'], ['syracusae', 'catana'], ['catana', 'messana'], ['catana', 'hybla']];
@@ -583,8 +646,35 @@ function buildRoadGrid() {
   for (const r of ROADS) { mark(r.pts, 2); for (const b of r.bridges) STATIC_BRIDGES.push({ ...b, type: 'pons', built: true, id: 'sb' + STATIC_BRIDGES.length }); }
 }
 export const roadsList = () => ROADS;
+export const roadSurface=(x,z)=>ROADBEDS?.at(x,z)||null;
 export const staticBridges = () => STATIC_BRIDGES;
+function roadOverlap(x,z,r){return ROADS.some(q=>q.pts?.some((p,i)=>{if(!i)return false;const a=q.pts[i-1],dx=p[0]-a[0],dz=p[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));return Math.hypot(x-a[0]-dx*t,z-a[1]-dz*t)<(q.w||4)/2+r;}));}
 export const onRoadNet = (x, z) => ROAD_GRID.has(Math.floor(x / 8) + ',' + Math.floor(z / 8));
+
+export function extendCivicAvenues(C){
+ if(!C.streets?.[1])return;
+ const civic=C.layout.filter(b=>b.avenue).map(b=>{const[u,v]=cityLocal(C,b.x,b.z);return{u,v,r:BUILDINGS[b.type].r};});
+ const west=Math.min(-C.R-4,...civic.filter(b=>Math.abs(b.v)<Math.abs(b.u)).map(b=>b.u-b.r-4)),east=Math.max(C.R+4,...civic.filter(b=>Math.abs(b.v)<Math.abs(b.u)).map(b=>b.u+b.r+4));
+ const inland=Math.min(-C.R-4,...civic.filter(b=>Math.abs(b.u)<Math.abs(b.v)).map(b=>b.v-b.r-4));
+ C.streets[0].pts[0]=cityPt(C,0,inland);C.streets[1].pts=[cityPt(C,west,0),cityPt(C,east,0)];
+}
+
+// Apply after seeded resource generation so adding the junction does not shift resource IDs.
+function connectArenaJunction(W) {
+ const city=W.cities.find(c=>c.id==='messana'),branch=city?.streets.find(s=>s.arenaApproach);
+ if(!branch)return;const gate=city.gates.reduce((a,b)=>a.z>b.z?a:b);
+ const road=W.roads.find(r=>Math.hypot(r.pts[0][0]-gate.x,r.pts[0][1]-gate.z)<1||Math.hypot(r.pts.at(-1)[0]-gate.x,r.pts.at(-1)[1]-gate.z)<1);
+ if(!road)return;
+ const reverse=Math.hypot(road.pts[0][0]-gate.x,road.pts[0][1]-gate.z)>1,pts=reverse?[...road.pts].reverse():[...road.pts];
+ const x=gate.x+Math.sin(gate.a)*18,z=gate.z+Math.cos(gate.a)*18;
+ const next=pts.findIndex(p=>Math.hypot(p[0]-gate.x,p[1]-gate.z)>=34);if(next<0)return;
+ const onward=pts[next];pts.splice(1,next-1,[x,z]);road.pts=reverse?pts.reverse():pts;
+ const entry=branch.pts[1];branch.pts[0]=[x,z];branch.junctionStart=10;
+ city.streets.push({w:8,pts:[[gate.x,gate.z],[x,z]],arenaGateLink:true,junctionEnd:9});
+ const arms=[{x:gate.x,z:gate.z,width:8},{x:onward[0],z:onward[1],width:5.2},{x:entry[0],z:entry[1],width:8}];
+ city.junctions=[{id:'messana-arena',x,z,road:road.id,arms,polygon:junctionPolygon(x,z,arms)}];
+ buildRoadGrid();syncStreetCache(W.cities);
+}
 
 // ---------- Районы и клетки городов (4×4 м, сетка повёрнута по улицам города) ----------
 export function districtAt(x, z) {
@@ -594,7 +684,8 @@ export function districtAt(x, z) {
     const [u, v] = cityLocal(C, x, z);
     let k = null;
     if (!C.inland && Math.hypot(x - C.hx, z - C.hz) < 72 && d < C.R + 30) k = 'harbor';
-    else if (d < C.R * 0.52) k = 'center';
+    else if (u > 10 && v < -10 && d < C.R - 8) k = 'center';
+    else if (d < C.R * 0.52) k = 'outer';
     else if (d < C.R - 5) k = 'outer';
     else if (d > C.R + 7) k = 'extra';
     return k ? { city: C.id, C, d: k, u, v } : null;
@@ -606,7 +697,14 @@ export const cellCenter = (C, i, j) => cityPt(C, (i + 0.5) * CELL, (j + 0.5) * C
 // блок n×n клеток, ближайший к точке: центр блока и первая клетка
 export function blockSnap(C, x, z, n) { const [u, v] = cityLocal(C, x, z); const i0 = Math.round(u / CELL - n / 2), j0 = Math.round(v / CELL - n / 2); const [bx, bz] = cityPt(C, (i0 + n / 2) * CELL, (j0 + n / 2) * CELL); return { i0, j0, x: bx, z: bz }; }
 // клетка свободна от улиц, стен, воды и городских зданий
-const _muni = new Map();
+const _muni = new Map(), _ports = new Map();
+// Reserve the harbour's wings, quay, piers and approach, rather than one small circle.
+export function portOverlap(x,z,r,ports){
+  return ports.some(b=>{const dx=x-b.x,dz=z-b.z,c=Math.cos(b.ry||0),s=Math.sin(b.ry||0),lx=dx*c-dz*s,lz=dx*s+dz*c;
+    const boxes=[[-44,44,-25,12],[-44,44,0,PORTUS_LEN+8],[-8,8,-42,12]];
+    return boxes.some(([x0,x1,z0,z1])=>Math.hypot(lx-Math.max(x0,Math.min(x1,lx)),lz-Math.max(z0,Math.min(z1,lz)))<r+3);
+  });
+}
 // цена клетки (денарии): у каждой клетки своя — по району, близости к форуму и гавани и «удачности» места
 export function cellPrice(C, i, j) {
   const [x, z] = cellCenter(C, i, j), dd = districtAt(x, z); if (!dd) return null;
@@ -614,18 +712,28 @@ export function cellPrice(C, i, j) {
   const k = 0.7 + 0.55 * Math.max(0, 1 - dc / (C.R + 140)) + 0.3 * Math.max(0, 1 - dh / 90) + 0.25 * hash2(i * 7 + 3, j * 11 + 5);
   return Math.max(2, Math.round(base * k));
 }
+export function cityRoadAllowed(C,i,j,buildings,plots={}){
+ const[x,z]=cellCenter(C,i,j),[u,v]=cityLocal(C,x,z);
+ if(Math.hypot(u,v)>C.R-9||Math.abs(u)<6.5||Math.abs(v)<6.5||plots[`${C.id}:${i}:${j}`]||terrainHeight(x,z)<1||slopeAt(x,z,2).d>2)return false;
+ if(portOverlap(x,z,3,buildings.filter(b=>b.type==='portus')))return false;
+ if(buildings.some(b=>b.type==='via_cell'?b.city===C.id&&b.cell?.i===i&&b.cell?.j===j:Math.hypot(b.x-x,b.z-z)<(BUILDINGS[b.type]?.r||4)+3))return false;
+ return [[i-1,j],[i+1,j],[i,j-1],[i,j+1]].some(([a,b])=>{const[nx,nz]=cellCenter(C,a,b),[lu,lv]=cityLocal(C,nx,nz);return Math.abs(lu)<6.5||Math.abs(lv)<6.5||buildings.some(q=>q.type==='via_cell'&&q.city===C.id&&q.cell?.i===a&&q.cell?.j===b);});
+}
+let cityRoadCells=new Set();
+export function setCityRoadCells(buildings){cityRoadCells=new Set(buildings.filter(b=>b.type==='via_cell'&&b.cell).map(b=>`${b.city}:${b.cell.i}:${b.cell.j}`));}
 export function cellFree(C, i, j) {
+  if(cityRoadCells.has(`${C.id}:${i}:${j}`))return false;
   const u = (i + 0.5) * CELL, v = (j + 0.5) * CELL, d = Math.hypot(u, v);
   if (Math.abs(u) < 6.5 && d < C.R + 140) return false; // кардо (и дорога от ворот)
   if (Math.abs(v) < 6.5 && d < C.R + 140) return false; // декуманус
   if (d > C.R - 6 && d < C.R + 8) return false; // стены
   const [x, z] = cityPt(C, u, v);
-  if (terrainHeight(x, z) < 1.1 || waterEdgeDist(x, z) < 3 || onRoadNet(x, z)) return false;
+  if (terrainHeight(x, z) < 1.1 || waterEdgeDist(x, z) < 3 || roadOverlap(x,z,CELL/2) || portOverlap(x,z,CELL/2,_ports.get(C.id)||[])) return false;
   let L = _muni.get(C.id); if (!L) { L = []; _muni.set(C.id, L); }
-  for (const b of L) if (Math.hypot(b.x - x, b.z - z) < b.r + 2.2) return false;
+  for (const b of L) if (cellOverlaps(x,z,C.ry,CELL,b,BUILDINGS[b.type])) return false;
   return true;
 }
-export function setMuniFootprints(cities) { _muni.clear(); for (const c of cities) _muni.set(c.id, c.layout.map((l) => ({ x: l.x, z: l.z, r: (BUILDINGS[l.type] || {}).r || 4 })).concat(c.layout.filter((l) => l.type === 'portus').flatMap((l) => [-26, 0, 26].flatMap((ox) => [0, 26].map((oz) => ({ x: l.x + Math.cos(l.ry) * ox + Math.sin(l.ry) * oz, z: l.z - Math.sin(l.ry) * ox + Math.cos(l.ry) * oz, r: 20 })))))); }
+export function setMuniFootprints(cities) { const mess=cities.find(c=>c.id==='messana'),arena=mess?.layout.find(l=>l.type==='amphitheatrum');if(arena)MESSANA_CLEAR=[{x:mess.x,z:mess.z,r:mess.R+45},{x:arena.x,z:arena.z,r:90}]; _ports.clear();_muni.clear();for(const C of cities){_ports.set(C.id,C.layout.filter(l=>l.type==='portus'));_muni.set(C.id,C.layout.filter(l=>l.type!=='portus'));} }
 // точка высадки с моря у цели (x,z): берег и направление в море (a: cos/sin)
 export function seaApproach(x, z, spread = 0) {
   const isl = islandAt(x, z); if (!isl) return null;
@@ -634,13 +742,21 @@ export function seaApproach(x, z, spread = 0) {
   for (let d = 0; d < 900; d += 3) { const px = x - gx * d, pz = z - gz * d; if (terrainHeight(px, pz) < -1.5) return { x: px + gx * 9, z: pz + gz * 9, a: Math.atan2(-gz, -gx) }; }
   return null;
 }
+export function protectEstates(world,states={},buildings=[]){
+ const roman=world.cities.filter(c=>(states[c.id]?.owner||c.owner)==='rome'),blocked=[];
+ for(const p of world.pois){if(p.type!=='suburb_villa')continue;
+  const hostile=(states[p.city]?.owner||world.cities.find(c=>c.id===p.city)?.owner)!=='rome';
+  p.suppressed=hostile&&(roman.some(c=>Math.hypot(p.x-c.x,p.z-c.z)<c.R+45+p.r)||buildings.some(b=>roman.some(c=>c.id===b.city)&&Math.hypot(p.x-b.x,p.z-b.z)<(BUILDINGS[b.type]?.r||6)+p.r+35));
+  if(p.suppressed)blocked.push(p.id);
+ }return blocked;
+}
 // ---------- Генерация ----------
 // Мир полностью определяется seed: сервер и клиент считают его одинаково.
 export function generateWorld(seed) {
   COAST_READY = false;
   const rnd = makeRng(seed);
   const R = (a, b) => a + rnd() * (b - a);
-  FLATS = [];
+  FLATS = []; MESSANA_CLEAR=[];ROADBEDS=null;WRECK_DECKS=[];
   const W = { seed, nodes: [], dens: [], camps: [], chests: [], pois: [], colonySites: [], entrances: [], flats: FLATS };
   let nid = 1;
   const pois = W.pois;
@@ -667,6 +783,10 @@ export function generateWorld(seed) {
   addPoi('start_camp', START.x, START.z, { ry: START.ry + Math.PI, r: 13, name: 'Приют новоприбывших' });
   addPoi('pier', PIER.x, PIER.z, { ry: PIER.ry, r: 4 });
   genCities(W, rnd, addPoi);
+  const mess=W.cities.find(c=>c.id==='messana'),arena=mess.layout.find(l=>l.type==='amphitheatrum');
+  MESSANA_CLEAR=[{x:mess.x,z:mess.z,r:mess.R+45},{x:arena.x,z:arena.z,r:90}];
+  // Stable POI ids; suppression also reconciles older saves without erasing campaign progress.
+  protectEstates(W,{},W.cities.flatMap(c=>c.layout.map(b=>({...b,city:c.id}))));
   addPoi('volcano', VOLCANO.x, VOLCANO.z, { ry: 0, r: 2, name: 'Этна' });
   // скалы и обломки в море
   W.traders = []; TRADERS = W.traders;
@@ -880,6 +1000,9 @@ export function generateWorld(seed) {
       W.riverRocks.push({ x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, s: Math.round((0.9 + rnd() * 1.6) * 100) / 100 });
     }
   }
+  connectArenaJunction(W);
+  ROADBEDS=buildRoadbeds(ROADS,terrainHeight);
+  setupWreckDecks(W);
   COAST_READY = true;
   return W;
 }
