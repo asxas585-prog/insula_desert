@@ -27,7 +27,7 @@
     <div class="startRule"></div>
     <label class="fld"><span>Имя персонажа</span><input id="nameInput" maxlength="18" placeholder="Например, Марк Валерий" autocomplete="off"></label>
     <label class="fld"><span>Личный код <i>(необязательно)</i></span><input id="codeInput" maxlength="5" inputmode="numeric" type="password" placeholder="5 цифр" autocomplete="off"></label>
-    <label class="fld"><span>Пароль к коду</span><input id="passwordInput" type="password" minlength="10" maxlength="128" autocomplete="current-password" placeholder="Не меньше 10 символов"></label><div class="hint">Код — имя учётной записи, пароль защищает вход. Без кода персонаж привязан к секрету этого браузера. Для старого персонажа получите пароль у администратора.</div>
+    <div class="hint">С кодом персонаж доступен с любого компьютера. Без кода — он сохранится в этом браузере.</div>
     <div class="fld"><span>Цвет туники</span><div id="colorRow" class="colorRow"></div></div>
     <button id="joinBtn" class="btn big">Войти в мир</button>
     <div id="startErr" class="err"></div>
@@ -50,8 +50,6 @@
     <div class="bar sat"><div></div><span></span></div>
     <div class="bar xp"><div></div></div>
     <div id="hudBuffs"></div>
-    <div id="denarii"></div>
-    <button id="tradeBtn" class="btn sm alt">📦 Торговля: обучение</button><button id="plotsBtn" class="btn sm alt">▦ Участки: видны</button>
     <button id="encBtn" class="btn sm alt" title="Энциклопедия: что в каком окне и вкладке и что там делать">📖 Энциклопедия</button>
     <button id="rateBtn" class="btn sm alt" title="Рейтинги: рыба, гладиаторы, полководцы Поля Марса">🏆 Рейтинги</button>
     <button id="tpBtn" class="btn sm alt" title="Телепорт на ближайший римский форум — раз в 2 минуты">🏛 На форум</button>
@@ -74,6 +72,7 @@
   <div id="floats"></div>
   <div id="toasts"></div>
   <div id="hurt"></div>
+  <div id="denarii"></div>
   <div id="keysHint">Tab — вещи · C — персонаж · J — журнал · K — хозяйство · U — войско · M — карта · B — стройка · H — помощь</div>
 </div>
 

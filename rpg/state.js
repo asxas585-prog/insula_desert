@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as D from '../public/rpg/data.js';
 import * as WG from '../public/rpg/world.js';
-import { arrangeCityAdditions, protectCivicLayout } from './layout.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEV = process.env.DEV === '1' || process.argv.includes('--dev');
@@ -59,28 +58,22 @@ function freshWorld(seed) {
 
 export function loadAll() {
   let W = null;
-  try { W = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw new Error('Повреждено сохранение мира: ' + e.message); }
+  try { W = JSON.parse(fs.readFileSync(WORLD_FILE, 'utf8')); } catch {}
   if (!W || !W.seed) W = freshWorld(Math.floor(Math.random() * 1e9));
   const def = freshWorld(W.seed);
   for (const k of Object.keys(def)) if (W[k] === undefined) W[k] = def[k];
   G.W = W;
-  try { G.chars = JSON.parse(fs.readFileSync(CHARS_FILE, 'utf8')) || {}; } catch (e) { if (e.code !== 'ENOENT') throw new Error('Повреждено сохранение персонажей: ' + e.message); G.chars = {}; }
+  try { G.chars = JSON.parse(fs.readFileSync(CHARS_FILE, 'utf8')) || {}; } catch { G.chars = {}; }
+  W.coastKeep ||= W.buildings.filter(b => !b.muni).map(b => [b.x, b.z, (D.BUILDINGS[b.type]?.r || 8)]);
+  WG.setCoastalExclusions(W.coastKeep);
   G.world = WG.generateWorld(W.seed);
   for (const n of G.world.nodes) G.nodeById.set(n.id, n);
   for (const c of G.world.chests) { const mv = W.chestPos && W.chestPos[c.id]; if (mv) { c.x = mv.x; c.z = mv.z; } G.chestById.set(c.id, c); }
-  for (const b of W.buildings) uid = Math.max(uid, (b.id | 0) + 1);
+  for (const b of W.buildings) { uid = Math.max(uid, (b.id | 0) + 1); for (const it of b.items || []) uid = Math.max(uid, (it.uid | 0) + 1); }
   for (const s of W.ships) uid = Math.max(uid, (s.id | 0) + 1);
   for (const s of W.slaves) uid = Math.max(uid, (s.id | 0) + 1);
   for (const c of Object.values(G.chars)) for (const it of c.items || []) uid = Math.max(uid, (it.uid | 0) + 1);
-  for (const c of Object.values(G.chars)) { for (const sq of c.squads || []) { uid = Math.max(uid, (sq.id | 0) + 1); sq.live = []; delete sq._previousLive; } for (const h of c.horses || []) uid = Math.max(uid, (h.id | 0) + 1); for (const l of c.lions || []) uid = Math.max(uid, (l.id | 0) + 1); if (c.guard) c.guard.id = null; }
-  for (const r of W.routes || []) uid = Math.max(uid, (r.id | 0) + 1);
-  for (const q of W.quests || []) uid = Math.max(uid,(q.id|0)+1);
-  for(const s of W.ships)for(const f of s.tunaHold||[])if(f)uid=Math.max(uid,(f.id|0)+1);
-  for (const o of W.slaveMarket || []) uid = Math.max(uid, (o.id | 0) + 1);
-  for (const st of Object.values(W.watch || {})) st.live = [];
   uid += 10;
-  for (const c of Object.values(G.chars)) for (const record of [...(c.sunk || []), ...(c.warRent || []),...(c.quests||[]),...(c.tunaCarry?[c.tunaCarry]:[])]) uid = Math.max(uid, (record.id | 0) + 1);
-  for(const c of Object.values(G.chars))for(const id of c.doneQuests||[])uid=Math.max(uid,(id|0)+1);
   for (const c of Object.values(G.chars)) if (c.squads) c.squads = c.squads.filter((sq) => !sq.war); // отряды Поля Марса — только на время боя
   W.cityOff = W.cityOff || {}; if (W.election !== undefined && W.cityOff.messana && W.cityOff.messana.election === undefined) W.cityOff.messana.election = W.election; cityOff('messana'); // Мессана: те же объекты, что G.W.offices / G.W.laws
   for (const s of W.slaves) if (!s.trait) Object.assign(s, D.rollSlave(s.grade || 1)); // навык и характеристики старым рабам
@@ -108,30 +101,27 @@ export function ensureCities(W) {
   const ids = new Set(G.world.cities.map((C) => C.id)); // убранные города (Акрагант, Лилибей): их здания и состояние удаляются
   for (const k of Object.keys(W.cityState)) if (!ids.has(k)) delete W.cityState[k];
   W.buildings = W.buildings.filter((x) => !x.muni || ids.has(x.muni.split(':')[0]));
+  const tyndaris = G.world.cities.find(c => c.id === 'tyndaris');
+  if (tyndaris) W.buildings = W.buildings.filter(b => !(['amphitheatrum', 'theatrum'].includes(b.type) &&
+    (b.city === 'tyndaris' || b.muni?.startsWith('tyndaris:') || Math.hypot(b.x - tyndaris.x, b.z - tyndaris.z) < tyndaris.R + 130)));
   for (const C of G.world.cities) {
     const st = W.cityState[C.id] = W.cityState[C.id] || { owner: C.owner, def: C.owner === 'rome' ? 0 : 100, tasks: {}, captured: null };
     // здание из сохранения ищем по городу и типу (ближайшее), чтобы смена планировки не путала здания
-    protectCivicLayout(W,C);
     const used = new Set();
     C.layout.forEach((L, i) => {
       const key = C.id + ':' + i;
       let b = W.buildings.find((x) => x.muni === key && x.type === L.type && !used.has(x));
       if (!b) { let bd = 1e9; for (const x of W.buildings) { if (!x.muni || used.has(x) || x.type !== L.type || !x.muni.startsWith(C.id + ':')) continue; const d = Math.hypot(x.x - L.x, x.z - L.z); if (d < bd) { bd = d; b = x; } } }
-      if (b) { if(C.id==='messana'&&b.type==='amphitheatrum'){b.built=true;b.ruined=false;b.hp=b.maxHp;b.prog={...b.cost};} used.add(b); b.muni = key; b.x = L.x; b.z = L.z; b.ry = L.ry; if(L.guildRelocated)b.guildRelocated=true; b.enemy = st.owner !== 'rome'; if (L.cls != null) b.cls = L.cls; return; }
+      if (b) { used.add(b); b.muni = key; b.x = L.x; b.z = L.z; b.ry = L.ry; b.enemy = st.owner !== 'rome'; if (L.cls != null) b.cls = L.cls; return; }
       const def = D.BUILDINGS[L.type]; if (!def) return;
       const cost = { ...def.cost }, tot = Object.values(cost).reduce((a, n) => a + n, 0);
-      const roman = st.owner === 'rome', ruin = roman && C.id !== 'messana';
+      const roman = st.owner === 'rome', ruin = roman && (C.id !== 'messana' || L.type === 'amphitheatrum');
       b = { id: nid(), type: L.type, x: L.x, z: L.z, ry: L.ry, owner: null, ownerName: null, built: !ruin, prog: ruin ? {} : { ...cost }, cost, hp: ruin ? 0 : tot * 10, maxHp: tot * 10, ruined: false, store: {}, slaves: [], level: 1, lastProd: Date.now() / 1000, contrib: {}, island: 'main', placed: Date.now(), done: Date.now(), muni: key, city: C.id, enemy: !roman };
-      if (L.cls != null) b.cls = L.cls; if(L.guildRelocated)b.guildRelocated=true;
+      if (L.cls != null) b.cls = L.cls;
       W.buildings.push(b); used.add(b);
     });
     W.buildings = W.buildings.filter((x) => !x.muni || !x.muni.startsWith(C.id + ':') || used.has(x)); // лишние (больше нет в планировке) — убираем
   }
-  W.buildings=W.buildings.filter(b=>b.type!=='amphitheatrum'||(b.muni&&['messana','syracusae'].includes(b.city)));
-  WG.setMuniFootprints(G.world.cities);
-  WG.setCityRoadCells(W.buildings);
-  arrangeCityAdditions(W,G.world.cities);
-  WG.protectEstates(G.world,W.cityState,W.buildings);
   // городские здания, которых больше нет в планировке, убираются
   // ресурсы под городскими зданиями и улицами вырублены
   for (const b of W.buildings) { if (!b.muni) continue; const r = (D.BUILDINGS[b.type] || {}).r || 4; for (const n of G.world.nodes) if (Math.abs(n.x - b.x) < r + 1 && Math.abs(n.z - b.z) < r + 1 && Math.hypot(n.x - b.x, n.z - b.z) < r + 0.8) W.nodes[n.id] = { a: 0, t: -1 }; }
@@ -163,7 +153,7 @@ export function saveAll() {
   try {
     for (const p of G.players.values()) if (p.char) { p.char.x = r1(p.inst ? p.instRet.x : p.x); p.char.z = r1(p.inst ? p.instRet.z : p.z); p.char.lastSeen = Date.now(); }
     fs.writeFileSync(WORLD_FILE + '.tmp', JSON.stringify(G.W)); fs.renameSync(WORLD_FILE + '.tmp', WORLD_FILE);
-    fs.writeFileSync(CHARS_FILE + '.tmp', JSON.stringify(G.chars, (key, value) => key === '_previousLive' ? undefined : value)); fs.renameSync(CHARS_FILE + '.tmp', CHARS_FILE);
+    fs.writeFileSync(CHARS_FILE + '.tmp', JSON.stringify(G.chars)); fs.renameSync(CHARS_FILE + '.tmp', CHARS_FILE);
   } catch (e) { console.error('[RPG] Не удалось сохранить:', e.message); }
   saving = false;
 }
@@ -175,7 +165,6 @@ export function log(text, kind = 'info', to = null) {
   if (to) send(to, { type: 'log', text, kind });
   else broadcast({ type: 'log', text, kind });
 }
-export function announce(kind,text,tone='good'){log(text,tone);broadcast({type:'announcement',kind,text});}
 export function chronicle(text) {
   G.W.chronicle.unshift({ t: Date.now(), day: G.W.day, text });
   if (G.W.chronicle.length > 60) G.W.chronicle.length = 60;
@@ -201,7 +190,7 @@ export const charOf = (p) => p.char;
 export const rankOf = (c) => Math.min(D.rankIdx(c.dig || 0), c.rankBought ?? D.rankIdx(c.dig || 0));
 export const rankEarned = (c) => D.rankIdx(c.dig || 0);
 // пределы по должностям и латифундии
-export const slaveLimitOf = (c) => D.RANKS[rankOf(c)].slaves + (hasOffice(c, 'praefectus') || hasOffice(c, 'senator') ? 3 : 0) + (c.lat ? D.LATIFUNDIUM.slavesBonus : 0);
+export const slaveLimitOf = (c) => D.RANKS[rankEarned(c)].slaves + (hasOffice(c, 'praefectus') || hasOffice(c, 'senator') ? 3 : 0) + (c.lat ? D.LATIFUNDIUM.slavesBonus : 0);
 // ---------- Должности и законы — у каждого города свои (Мессана: G.W.offices / G.W.laws) ----------
 export function cityOff(cid) {
   const W = G.W; W.cityOff = W.cityOff || {};
@@ -215,10 +204,9 @@ export const lawsAt = (pos) => (pos && isFinite(pos.x) ? cityOff(cityNear(pos.x,
 // все должности персонажа во всех городах: [{ city, k }] (не больше двух)
 export function officeHolds(c) { const out = []; if (!c || !G.W) return out; cityOff('messana'); for (const [cid, o] of Object.entries(G.W.cityOff || {})) for (const [k, h] of Object.entries(o.offices || {})) if (h && h.id === c.id) out.push({ city: cid, k }); return out; }
 export const officesOf = (c) => [...new Set(officeHolds(c).map((h) => h.k))];
-export function officeCityOf(c) { const p = [...G.players.values()].find(p => p.char?.id === c.id); const pos = {x:p?.x ?? c.x ?? 0,z:p?.z ?? c.z ?? 0}; return (G.world?.cities || []).filter(t=>dist(t,pos)<=t.R+230).sort((a,b)=>dist(a,pos)-dist(b,pos))[0]?.id || null; }
-export const hasOffice = (c, k, city = officeCityOf(c)) => !!city && cityOff(city).offices?.[k]?.id === c.id;
-export const holderOf = (k, cid) => cid ? cityOff(cid).offices?.[k] || null : null;
-export const shipLimitOf = c => 3 + (hasOffice(c, 'praefectus') || hasOffice(c, 'senator') ? 1 : 0) + (hasOffice(c, 'navarchus') ? 2 : 0);
+export const hasOffice = (c, k) => officesOf(c).includes(k);
+export const holderOf = (k, cid = null) => { if (cid) return (cityOff(cid).offices || {})[k] || null; for (const o of Object.values(G.W.cityOff || { m: { offices: G.W.offices } })) if (o.offices && o.offices[k]) return o.offices[k]; return G.W.offices[k] || null; };
+export const shipLimitOf = (c) => 3 + (hasOffice(c, 'praefectus') || hasOffice(c, 'senator') ? 1 : 0) + (hasOffice(c, 'navarchus') ? 2 : 0);
 export const derivedOf = (c) => D.derived(c);
 // книга доходов и расходов по игровым дням: book(c, 'Продажи', +n) / book(c, 'Покупки', -n); остальное — «Прочее» (ledgerTick)
 export function book(c, cat, n) {
@@ -264,7 +252,6 @@ export const hasTool = (c, flag) => [c.gear.weapon, ...c.items].some((g) => g &&
 export function charPublic(c) {
   const look = {}; for (const s of ['weapon', 'offhand', 'head', 'body', 'legs']) look[s] = c.gear[s] ? [c.gear[s].k, c.gear[s].q] : null;
   if (c.torch) look.torch = 1;
-  if(c.tunaCarry)look.tuna=c.tunaCarry.kg;
   if (c.carry) look.carry = D.CRATES[c.carry] ? D.CRATES[c.carry].grade : 1;
   return { name: c.name, color: c.color, level: c.level, rank: rankOf(c), look };
 }

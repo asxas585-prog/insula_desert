@@ -1,13 +1,11 @@
-import {announce} from './state.js';
-import { housingCapacity } from './logistics.js';
-import { cityOf } from './access.js';
+import { placeArenaPairs } from './arena-pairs.js';
 // Пленники и рабы-гладиаторы, очки арены, школа гладиаторов, приручение львов
 import { G, D, WG, now, dist, rand, randi, pick, nid, send, log, fx, chronicle, rankOf, book, holderOf } from './state.js';
 import { slaveLimitOf } from './state.js';
 import { spawnMob, grantXp, grantDig } from './combat.js';
 import { builtOf, slaveGrade } from './economy.js';
 const say = (p, text, kind = 'info') => send(p, { type: 'log', text, kind });
-const slaveLimit = c => Math.min(slaveLimitOf(c), housingCapacity(c));
+const slaveLimit = (c) => slaveLimitOf(c);
 const mySlaves = (c) => G.W.slaves.filter((s) => s.owner === c.id);
 
 // ---------- Пленники: поверженный варвар/карфагенянин/пират может встать на колено ----------
@@ -80,13 +78,12 @@ export function ludusTick() {
 // ---------- Окно гладиаторов: улучшения, магазин, назначения ----------
 export function gladMsg(p, m) {
   const c = p.char, ap = () => c.ap || 0;
-  const amph = builtOf('amphitheatrum').find((b) => dist(p, b) < 95);
+  const amph = builtOf('amphitheatrum').find((b) => dist(p, b) < 70);
   if (m.type === 'enslave') return enslave(p, m.id);
   if (m.type === 'tame') return tame(p, m.id);
   if (m.type === 'gladLudus') { // раб в школу гладиаторов / из неё
     const s = G.W.slaves.find((x) => x.id === m.sid); if (!s || s.owner !== c.id) return;
     if (!m.on) { s.ludus = null; G.dirtyWorld = true; return; }
-    if (s.squad) return say(p, 'Сначала распустите отряд работника.');
     // своя школа — бесплатно; чужая (рядом, до 30 м) — 25 ден. хозяину за обучение
     const b = G.W.buildings.find((x) => x.type === 'ludus' && x.owner === c.id && x.built) || G.W.buildings.find((x) => x.type === 'ludus' && x.built && dist(p, x) < 30); if (!b) return say(p, 'Нет своей Школы гладиаторов (или подойдите к чужой).', 'warn');
     if (G.W.slaves.filter((x) => x.ludus === b.id).length >= D.BUILDINGS.ludus.slots) return say(p, `В школе ${D.BUILDINGS.ludus.slots} мест.`, 'warn');
@@ -107,7 +104,7 @@ export function gladMsg(p, m) {
   if (m.type === 'gladBuy') { // купить чужого гладиатора в школе (хозяину школы — 10%, если он не продавец)
     const s = G.W.slaves.find((x) => x.id === m.sid); if (!s || !s.sale || s.owner === c.id) return;
     const b = G.W.buildings.find((x) => x.id === s.ludus); if (!b || dist(p, b) > 25) return say(p, 'Подойдите к школе гладиаторов.', 'warn');
-    if (G.W.slaves.filter((x) => x.owner === c.id).length >= Math.min(slaveLimitOf(c), housingCapacity(c))) return say(p, `Ваше звание позволяет держать не больше ${slaveLimitOf(c)} рабов.`, 'warn');
+    if (G.W.slaves.filter((x) => x.owner === c.id).length >= slaveLimitOf(c)) return say(p, `Ваше звание позволяет держать не больше ${slaveLimitOf(c)} рабов.`, 'warn');
     if (c.den < s.sale) return say(p, `Нужно ${s.sale} денариев.`, 'warn');
     const seller = G.chars[s.owner], host = b.owner && b.owner !== s.owner ? G.chars[b.owner] : null, cut = host ? Math.round(s.sale * 0.1) : 0, tax = Math.round(s.sale * 0.05);
     c.den -= s.sale; book(c, 'Покупка гладиаторов', -s.sale); G.W.treasury += tax;
@@ -138,6 +135,10 @@ export function gladMsg(p, m) {
 
 // ---------- Бой своих бойцов (раб-гладиатор и/или лев) против гладиаторов арены ----------
 const FOES = ['glad_murmillo', 'glad_retiarius', 'glad_thraex'];
+export function gladiatorExperience(s, amount) {
+  s.gxp = (s.gxp || 0) + amount;
+  while ((s.glvl || 0) < 10 && s.gxp >= gladNeed(s.glvl || 0)) { s.gxp -= gladNeed(s.glvl || 0); s.glvl = (s.glvl || 0) + 1; }
+}
 export function gladPower(s) { const g = D.SLAVE_GRADES[slaveGrade(s)].glad, lv = s.glvl || 0, T = D.SLAVE_TRAITS[s.trait] || {}; return { hp: Math.round(140 * g * (1 + lv * 0.12) * (1 + (s.ga || 0) * 0.12) * (T.hp || 1) * (1 + ((s.end || 5) - 5) * 0.03)), dmg: Math.round(14 * g * (1 + lv * 0.08) * (1 + (s.gw || 0) * 0.1) * (T.glad || 1) * (1 + ((s.str || 5) - 5) * 0.03)) }; }
 function startBout(p, amph, m) {
   const c = p.char;
@@ -147,28 +148,48 @@ function startBout(p, amph, m) {
   if (!s && !lion) return;
   if (s && (s.rest || 0) > now()) return say(p, `${s.name} ещё не оправился от ран (${Math.ceil(s.rest - now())} с).`, 'warn');
   if (s && slaveGrade(s) < 2 && (s.glvl || 0) < 2) return say(p, `${s.name} слишком слаб для арены: нужен раб 2-го разряда и выше или тренировка в школе гладиаторов до 2 уровня.`, 'warn');
-  const ry = amph.ry || 0, A = { x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry };
-  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry, mode: 'bout', fighters: new Set(), bets: [], state: 'fight', t: now() + 150, owner: c.id, by: c.name, allies: [], foes: [], slave: s ? s.id : null, lion: lion ? lion.id : null };
+  const ry = amph.ry || 0, A = { x: amph.x, z: amph.z, rx: 24, rz: 16 };
+  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 24, rz: 16, ry, mode: 'bout', fighters: new Set(), bets: [], state: 'fight', t: now() + 150, owner: c.id, by: c.name, allies: [], foes: [], slave: s ? s.id : null, lion: lion ? lion.id : null };
   const a = G.arena, side = (k) => ({ x: A.x + Math.cos(ry) * 12 * k, z: A.z - Math.sin(ry) * 12 * k });
   const L = side(-1), Rr = side(1);
   if (s) { const pw = gladPower(s); const mm = spawnMob('glad_slave', L.x, L.z, { lvl: 1, leash: 99 }); mm.maxHp = mm.hp = pw.hp; mm.dmg = pw.dmg; mm.arena = A; mm.ownerName = c.name; mm.title = s.name; a.allies.push(mm.id); }
   if (lion) { const mm = spawnMob('lion_tamed', L.x + 3, L.z + 3, { lvl: lion.lvl || 1, leash: 99 }); mm.arena = A; a.allies.push(mm.id); }
-  const grade = s ? slaveGrade(s) : 2, lv = s ? s.glvl || 0 : 2, nFoes = 1 + (grade >= 3 ? 1 : 0) + (lion && s ? 1 : 0);
-  for (let i = 0; i < nFoes; i++) { const f = spawnMob(pick(FOES), Rr.x + i * 2.5, Rr.z + i * 2.5, { lvl: 1 + Math.round(grade * 1.5 + lv * 0.6), leash: 99 }); f.arena = A; a.foes.push(f.id); }
-  announce('games',`🏟 ${c.name} выставил(а) на арену: ${[s && s.name, lion && 'льва ' + lion.name].filter(Boolean).join(' и ')}! Делайте ставки.`, 'warn');
+  const friendly = a.allies.map(id => G.mobs.get(id));
+  const total = Math.max(4, Math.ceil((friendly.length + 2) / 2) * 2), count = total - friendly.length;
+  a.ffa = nid();
+  friendly.forEach(mm => { mm.ffa = a.ffa; mm.arenaSide = c.id; });
+  for (let i = 0; i < count; i++) {
+    const ref = friendly[i % friendly.length], type = FOES[i % FOES.length], def = D.ENEMIES[type];
+    const f = spawnMob(type, Rr.x, Rr.z, { lvl: 1, leash: 99 });
+    f.arena = A; f.ffa = a.ffa; f.arenaSide = 'npc:' + f.id;
+    // Учитываем броню и полный цикл удара: у бота нет скрытого бонуса от номера дня.
+    f.hp = f.maxHp = Math.round(ref.maxHp * (1 - (def.armor || 0) / 100) / (1 - (ref.armor || 0) / 100) * 0.95);
+    f.dmg = ref.dmg * ((def.cd || 1.2) + 0.5) / ((ref.def.cd || 1.2) + 0.5) * 0.95;
+    a.foes.push(f.id);
+  }
+  const order = [];
+  a.allies.forEach((id, i) => order.push(id, a.foes[i]));
+  order.push(...a.foes.slice(a.allies.length));
+  placeArenaPairs(a, order);
+  log(`🏟 ${c.name} выставил(а): ${[s && s.name, lion && 'льва ' + lion.name].filter(Boolean).join(' и ')}. На песке ${total} бойца; сначала отдельные пары, затем бой победителей. Поражение тоже даёт опыт.`, 'warn');
   fx({ kind: 'horn', x: A.x, z: A.z });
 }
 export function boutTick(a) { // вызывается из arenaTick; true — бой окончен
   const t = now();
   const alive = (ids) => ids.filter((id) => { const m = G.mobs.get(id); return m && m.hp > 0; });
   const al = alive(a.allies), fo = alive(a.foes);
-  if (al.length && fo.length && t < a.t) return false;
+  if (fo.length && al.length + fo.length > 1 && t < a.t) return false;
   const owner = Object.values(G.chars).find((c) => c.id === a.owner), win = al.length > 0 && fo.length === 0;
   const s = a.slave && G.W.slaves.find((x) => x.id === a.slave);
   const p = [...G.players.values()].find((q) => q.char && q.char.id === a.owner);
   if (owner) {
     if (win) { const pts = 6 + (s ? slaveGrade(s) * 2 : 4); owner.ap = (owner.ap || 0) + pts; owner.den += 30 + pts * 5; if (s) { s.gxp = (s.gxp || 0) + 40; while ((s.glvl || 0) < 10 && s.gxp >= gladNeed(s.glvl || 0)) { s.gxp -= gladNeed(s.glvl || 0); s.glvl = (s.glvl || 0) + 1; } } if (p) { say(p, `🏆 Победа на арене! +${pts} очков арены.`, 'good'); grantDig(p, 4); } log(`🏟 Бойцы ${owner.name} победили на арене!`, 'good'); }
-    else { if (s) s.rest = t + 180; if (p) say(p, 'Ваши бойцы проиграли. Гладиатор ранен и 3 минуты отдыхает.', 'warn'); log('🏟 Бойцы арены одержали верх.', 'info'); }
+    else {
+      owner.ap = (owner.ap || 0) + 2;
+      if (s) { s.rest = t + 180; gladiatorExperience(s, 15); }
+      if (p) say(p, 'Поражение: гладиатор получил 15 опыта, вам +2 очка арены. Отдых после ран — 3 минуты.', 'warn');
+      log('🏟 Бой на арене окончен. Проигравший гладиатор получил тренировочный опыт.', 'info');
+    }
   }
   for (const id of [...a.allies, ...a.foes]) G.mobs.delete(id);
   if (p) p.dirtyChar = true;
@@ -190,29 +211,39 @@ export function gamesTick() {
   // лучшие рабы-гладиаторы всех граждан (даже тех, кто не в игре) + гладиаторы арены
   const cand = W.slaves.filter((x) => !x.hired && !x.ship && !x.squad && (x.rest || 0) < now() && ((x.glvl || 0) >= 1 || slaveGrade(x) >= 2)).map((x) => ({ x, pw: gladPower(x) })).sort((a, b) => b.pw.hp * b.pw.dmg - a.pw.hp * a.pw.dmg).slice(0, 6);
   const list = cand.map(({ x, pw }) => ({ key: 's' + x.id, name: x.name, owner: (G.chars[x.owner] || {}).name || '?', sid: x.id, hp: pw.hp, dmg: pw.dmg, type: 'glad_slave' }));
-  for (let i = 0; list.length < 4 && i < NPC_GLADS.length; i++) list.push({ key: 'n' + i, name: NPC_GLADS[i][1], owner: 'арена', type: NPC_GLADS[i][0], lvl: 6 + W.day });
-  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 32.4, rz: 21.6, ry: amph.ry || 0, mode: 'games', fighters: new Set(), bets: [], state: 'prep', t: now() + (process.env.FAST === '1' ? 12 : 60), list, ffa: nid(), mobs: [] };
-  announce('games',`🏟 ВЕЛИКИЕ ИГРЫ в Амфитеатре! Бой «все против всех»: ${list.map((g) => g.name).join(', ')}. Ставки — 60 секунд (E у Амфитеатра).`, 'warn');
+  const desired = Math.max(4, Math.ceil(list.length / 2) * 2);
+  const median = list.length ? [...list].sort((a, b) => a.hp * a.dmg - b.hp * b.dmg)[Math.floor(list.length / 2)] : { hp: 180, dmg: 18 };
+  for (let i = 0; list.length < desired; i++) {
+    const type = NPC_GLADS[i % NPC_GLADS.length][0], def = D.ENEMIES[type];
+    list.push({ key: 'n' + i, name: NPC_GLADS[i % NPC_GLADS.length][1], owner: 'арена', type, lvl: 1,
+      hp: Math.round(median.hp * (1 - (def.armor || 0) / 100) / 0.9 * 0.95), dmg: median.dmg * ((def.cd || 1) + 0.5) / 1.45 * 0.95 });
+  }
+  G.arena = { bid: amph.id, x: amph.x, z: amph.z, rx: 24, rz: 16, ry: amph.ry || 0, mode: 'games', fighters: new Set(), bets: [], state: 'prep', t: now() + (process.env.FAST === '1' ? 12 : 60), list, ffa: nid(), mobs: [] };
+  log(`🏟 ВЕЛИКИЕ ИГРЫ в Амфитеатре! Бой «все против всех»: ${list.map((g) => g.name).join(', ')}. Ставки — 60 секунд (E у Амфитеатра).`, 'warn');
   chronicle('Начались Великие игры'); G.dirtyWorld = true;
 }
 function gamesRun(a) {
-  const t = now(), A = { x: a.x, z: a.z, rx: a.rx, rz: a.rz, ry:a.ry };
+  const t = now(), A = { x: a.x, z: a.z, rx: a.rx, rz: a.rz };
   if (a.state === 'prep') {
     if (t < a.t) return;
     a.state = 'fight'; a.t = t + (process.env.FAST === '1' ? 40 : 240);
     a.list.forEach((g, i) => { const ang = i / a.list.length * Math.PI * 2, x = a.x + Math.sin(ang) * 14, z = a.z + Math.cos(ang) * 10;
       const m = spawnMob(g.type, x, z, { lvl: g.lvl || 1, leash: 99 }); if (!m) return; if (g.hp) { m.maxHp = m.hp = g.hp; m.dmg = g.dmg; } m.arena = A; m.ffa = a.ffa; m.title = g.name; m.gkey = g.key; a.mobs.push(m.id); });
-    fx({ kind: 'horn', x: a.x, z: a.z }); announce('games','🏟 Великие игры: бой начался!', 'warn'); return;
+    placeArenaPairs(a, a.mobs); fx({ kind: 'horn', x: a.x, z: a.z }); log('🏟 Великие игры: бой начался! Бойцы начинают попарно в разных секторах.', 'warn'); return;
   }
   const alive = a.mobs.map((id) => G.mobs.get(id)).filter((m) => m && m.hp > 0);
   if (alive.length > 1 && t < a.t) return;
   const win = alive.sort((x, y) => y.hp / y.maxHp - x.hp / x.maxHp)[0], g = win && a.list.find((q) => q.key === win.gkey);
   // ставки: весь банк делят поставившие на победителя (ланисте — 10%), иначе банк — в казну
-  const pool = a.bets.reduce((s2, b) => s2 + b.amt, 0), wins = a.bets.filter((b) => g && b.on === g.key), wsum = wins.reduce((s2, b) => s2 + b.amt, 0), cut = holderOf('lanista', cityOf(a)) ? Math.round(pool * 0.1) : 0;
+  const pool = a.bets.reduce((s2, b) => s2 + b.amt, 0), wins = a.bets.filter((b) => g && b.on === g.key), wsum = wins.reduce((s2, b) => s2 + b.amt, 0), cut = holderOf('lanista') ? Math.round(pool * 0.1) : 0;
   for (const b of wins) { const p = G.players.get(b.pid); const n = Math.round((pool - cut) * b.amt / wsum); if (p) { p.char.den += n; book(p.char, 'Ставки', n); send(p, { type: 'log', text: `🏟 Ставка на ${g.name} сыграла: +${n} ден.`, kind: 'good' }); p.dirtyChar = true; } }
   if (!wins.length) G.W.treasury += pool - cut;
-  if (cut) { const L = G.chars[holderOf('lanista', cityOf(a)).id]; if (L) { L.den += cut; book(L, 'Доля ланисты', cut); } }
-  for (const x of G.W.slaves) if (a.list.some((q) => q.sid === x.id) && (!g || g.sid !== x.id)) x.rest = t + 180; // проигравшие — ранены, не убиты
+  if (cut) { const L = G.chars[holderOf('lanista').id]; if (L) { L.den += cut; book(L, 'Доля ланисты', cut); } }
+  for (const x of G.W.slaves) if (a.list.some((q) => q.sid === x.id) && (!g || g.sid !== x.id)) {
+    x.rest = t + 180; gladiatorExperience(x, 30);
+    const owner = G.chars[x.owner]; if (owner) owner.ap = (owner.ap || 0) + 3;
+    for (const p of G.players.values()) if (p.char?.id === x.owner) { p.dirtyChar = true; say(p, `${x.name}: 30 опыта за участие в Великих играх, вам +3 очка арены.`, 'info'); }
+  } // проигравшие — ранены, не убиты
   if (g) {
     if (g.sid != null) { const x = G.W.slaves.find((q) => q.id === g.sid), o = x && G.chars[x.owner]; if (x) { x.gw = x.gw || 0; x.gxp = (x.gxp || 0) + 120; x.gamesWon = (x.gamesWon || 0) + 1; while ((x.glvl || 0) < 10 && x.gxp >= gladNeed(x.glvl || 0)) { x.gxp -= gladNeed(x.glvl || 0); x.glvl = (x.glvl || 0) + 1; } } if (o) { o.den += 300; book(o, 'Победа на Великих играх', 300); o.ap = (o.ap || 0) + 20; } }
     G.W.gamesLog = [{ day: G.W.day, name: g.name, owner: g.owner }, ...(G.W.gamesLog || [])].slice(0, 10);

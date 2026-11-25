@@ -1,9 +1,8 @@
-import { availableResources, payResources } from './logistics.js';
-import { tradeStep } from './tutorial.js';
-import { encounterLevel } from './balance.js';
-import { shipCargoAllowed, cargoAccess, cityOf } from './access.js';
+import { inHarborZone } from './harbors.js';
+import { planCrate, applyCratePlan } from '../public/rpg/crates.js';
+import { cityWarehouses } from './warehouses.js';
 // Торговля ящиками, торговцы, причалы, пираты и морской бой (абордаж, лучники на борту, катапульта), свои корабли
-import { G, D, WG, now, dist, rand, randi, pick, nid, angDiff, send, broadcast, log, fx, chronicle, takeRes, shipLimitOf, hasAll, payAll, derivedOf, rankOf, lawsAt } from './state.js';
+import { G, D, WG, now, dist, rand, randi, pick, nid, angDiff, send, broadcast, log, fx, chronicle, takeRes, hasAll, payAll, derivedOf, rankOf, lawsAt } from './state.js';
 import { grantXp, grantDig, shoot, damagePlayer, spawnMob } from './combat.js';
 import { riders, builtOf, leaveShip, board as boardShip } from './economy.js';
 import { spawnEnemyShip, storyCheck } from './society.js';
@@ -14,7 +13,7 @@ const shipById = (id) => G.W.ships.find((s) => s.id === id);
 export const MAX_SHIPS = 3;
 
 // ---------- Причалы: гавань — 4 места (два причала, по кораблю с каждой стороны); торговец — 2 места ----------
-const BEAM = { scapha: 1.6, barca: 4.8, corbita: 4.6, liburna: 3.2, trireme: 4.2, quadrireme: 5, penteres: 5.4 };
+const BEAM = { scapha: 1.6, barca: 2, corbita: 4.6, liburna: 3.2, trireme: 4.2, quadrireme: 5, penteres: 5.4 };
 function local(o, lx, lz) { const c = Math.cos(o.ry || 0), s = Math.sin(o.ry || 0); return { x: o.x + lx * c + lz * s, z: o.z - lx * s + lz * c }; }
 export function berths(type) { // места вдоль каждого мостика гавани (с обеих сторон, несколько кораблей подряд), у набережной и у торговцев
   const L = SHIPS[type].len, B = BEAM[type] || 3, list = [];
@@ -29,15 +28,11 @@ export function berths(type) { // места вдоль каждого мост�
   for (const t of G.world.traders || []) for (const sd of [-1, 1]) { const p = local(t, sd * (1.8 + B / 2), 9 + L * 0.25), dk = local(t, 0, 9 + L * 0.25); list.push({ key: `t${t.id}:${sd}`, x: p.x, z: p.z, ry: t.ry, trader: t.id, deck: dk }); }
   return list;
 }
-export function berthFits(type,b){
- const L=SHIPS[type].len,B=BEAM[type]||3,c=Math.cos(b.ry||0),s=Math.sin(b.ry||0);
- return [[0,0],[-B*.48,0],[B*.48,0],[0,-L*.46],[0,L*.46],[-B*.3,-L*.35],[B*.3,-L*.35],[-B*.3,L*.35],[B*.3,L*.35]].every(([x,z])=>WG.shipOk(b.x+x*c+z*s,b.z-x*s+z*c));
-}
 export const berthByKey = (type, key) => key && berths(type).find((b) => b.key === key);
 export function freeBerth(type, near, maxD = 40, port = null) {
   const used = new Set(G.W.ships.filter((s) => s.berth).map((s) => s.berth));
   let best = null, bd = maxD;
-  for (const b of berths(type)) { if (used.has(b.key) || (port && b.port !== port)) continue; if (!berthFits(type,b)) continue; const d = near ? Math.hypot(b.x - near.x, b.z - near.z) : 0; if (d < bd) { bd = d; best = b; } }
+  for (const b of berths(type)) { if (used.has(b.key) || (port && b.port !== port)) continue; if (!WG.shipOk(b.x, b.z)) continue; const d = near ? Math.hypot(b.x - near.x, b.z - near.z) : 0; if (d < bd) { bd = d; best = b; } }
   return best;
 }
 function moorTick() {
@@ -45,9 +40,8 @@ function moorTick() {
     const rs = riders(s), helm = rs.find((q) => q.seat === 0);
     if (s.berth && helm && Math.abs(s.speed) > 0.8) s.berth = null;
     if (s.berth && helm && Math.abs(helm.helmIn?.f || 0) > 0.1) s.berth = null;
-    const invalid=s.berth&&!berthFits(s.type,s);if(invalid){s.berth=null;G.dirtyWorld=true;}
     if (s.berth || helm || Math.abs(s.speed) > 0.5) continue;
-    const b = freeBerth(s.type, s, invalid?110:35); if (!b) continue;
+    const b = freeBerth(s.type, s, 35); if (!b) continue;
     s.x = b.x; s.z = b.z; s.ry = b.ry; s.speed = 0; s.berth = b.key; G.dirtyWorld = true;
     for (const q of rs) say(q, '⚓ Корабль пришвартован у причала.');
   }
@@ -55,19 +49,14 @@ function moorTick() {
 
 // продажа и дар кораблей: Риму (в римской гавани) или другим гражданам
 export function shipTrade(p, m) {
-  const c = p.char;
-  if (m.type === 'shipScrap') { const i = (c.sunk || []).findIndex(s => s.id === m.sid); if (i < 0) return; c.sunk.splice(i, 1); p.dirtyChar = true; return; }
-  const s = shipById(m.sid); if (!s) return;
+  const c = p.char, s = shipById(m.sid); if (!s) return;
   const value = Object.entries(SHIPS[s.type].cost).reduce((a, [k, n]) => a + (D.RES[k] ? D.RES[k].p * n : 0), 0);
-  if (['shipBuy','shipForSale','shipRome'].includes(m.type) && (s.route || (G.W.routes || []).some(r => r.on && r.ships.includes(s.id)))) return say(p, 'Сначала остановите торговый путь корабля.', 'warn');
   if (m.type === 'shipBuy') {
-    if((s.tunaHold||[]).some(Boolean))return say(p,'Сначала владелец должен выгрузить тунца.','warn');
     if (!s.forSale || s.owner === c.id) return; if (dist(p, s) > SHIPS[s.type].len / 2 + 12) return say(p, 'Подойдите к кораблю.', 'warn');
-    if (G.W.ships.filter((x) => x.owner === c.id).length >= shipLimitOf(c)) return say(p, 'У вас уже предел кораблей.', 'warn');
+    if (G.W.ships.filter((x) => x.owner === c.id).length + (c.sunk || []).length >= D.shipLimit(c)) return say(p, 'У вас уже предел кораблей.', 'warn');
     if (c.den < s.forSale) return say(p, `Нужно ${s.forSale} денариев.`, 'warn');
     const seller = G.chars[s.owner]; c.den -= s.forSale; if (seller) seller.den += s.forSale;
     for (const q of G.players.values()) if (q.char && q.char.id === s.owner) { say(q, `⚖ ${c.name} купил(а) ваш корабль «${s.name}» за ${s.forSale} ден.`, 'good'); q.dirtyChar = true; }
-    for (const r of G.W.routes || []) r.ships = r.ships.filter(id => id !== s.id);
     s.owner = c.id; s.ownerName = c.name; s.forSale = 0; s.route = null; for (const sl of G.W.slaves) if (sl.ship === s.id) sl.ship = null;
     say(p, `⚓ Корабль «${s.name}» теперь ваш.`, 'good'); p.dirtyChar = true; G.dirtyWorld = true; return;
   }
@@ -76,8 +65,7 @@ export function shipTrade(p, m) {
   if (m.type === 'shipRome') {
     const port = builtOf('portus').find((b) => dist(b, s) < 90 && dist(p, b) < 90); if (!port) return say(p, 'Передать корабль Риму можно в римской гавани (корабль у причала).', 'warn');
     if ([...G.players.values()].some((q) => q.ship === s.id)) return say(p, 'Сначала все должны сойти на берег.', 'warn');
-    if ((s.tunaHold||[]).some(Boolean)||(s.crates || []).length || Object.values(s.cargo || {}).some(n => n > 0)) return say(p, 'Сначала разгрузите корабль.', 'warn');
-    for (const r of G.W.routes || []) r.ships = r.ships.filter(id => id !== s.id);
+    if ((s.crates || []).length || Object.keys(s.cargo || {}).length) return say(p, 'Сначала разгрузите корабль.', 'warn');
     G.W.ships = G.W.ships.filter((x) => x !== s); for (const sl of G.W.slaves) if (sl.ship === s.id) sl.ship = null;
     if (m.gift) { grantDig(p, Math.round(value / 6)); log(`🦅 ${c.name} безвозмездно передал(а) Республике корабль «${s.name}». Рим благодарит!`, 'good'); }
     else { const pay = Math.round(value * 0.55); c.den += pay; say(p, `⚖ Рим купил «${s.name}» за ${pay} ден.`, 'good'); }
@@ -100,15 +88,17 @@ const nearGuild = (p) => builtOf('collegium').find((b) => dist(p, b) < BUILDINGS
 export function crateMsg(p, m) {
   const c = p.char; c.guildCrates = c.guildCrates || {};
   const t = m.type;
-  if(['crateCraft','crateTake','crateUnload','cratePick'].includes(t)&&c.tunaCarry)return say(p,'Руки заняты тунцом: сначала отнесите его в гавань.','warn');
   if (t === 'crateCraft') {
     const g = nearGuild(p), def = CRATES[m.k]; if (!g || !def) return say(p, 'Ящики собирают в Торговой гильдии.', 'warn');
     if ((def.lvl || 0) > c.level) return say(p, `Нужен ${def.lvl} уровень.`, 'warn');
-    if (!hasAll(c, def.in)) return say(p, 'Не хватает товаров: ' + Object.entries(def.in).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '), 'warn');
-    payAll(c, def.in); tradeStep(p, 1);
+    const warehouses = cityWarehouses(c, g), stocks = [c.bag, ...warehouses.map(b => b.store || (b.store = {}))];
+    const lists = [c.items, ...warehouses.map(b => b.items || (b.items = []))];
+    const plan = planCrate(m.k, stocks, lists.flat(), typeof m.goods === 'string' ? m.goods : '');
+    if (!plan.ok) return say(p, plan.reason + ' Доступны сумка и ваши склады этого города.', 'warn');
+    applyCratePlan(plan, stocks, lists); G.dirtyBld = true;
     if (!c.carry) { c.carry = m.k; say(p, `📦 ${def.name} собран — он у вас в руках.`, 'good'); }
     else { c.guildCrates[m.k] = (c.guildCrates[m.k] || 0) + 1; say(p, `📦 ${def.name} собран и оставлен на складе гильдии (руки заняты).`, 'good'); }
-    grantXp(p, 6 * def.grade); tradeStep(p, 2);
+    grantXp(p, 6 * def.grade);
   } else if (t === 'crateTake') {
     if (!nearGuild(p) || c.carry || !(c.guildCrates[m.k] > 0)) return;
     c.guildCrates[m.k]--; c.carry = m.k;
@@ -123,7 +113,7 @@ export function crateMsg(p, m) {
   } else if (t === 'cratePick') {
     const cr = G.crates.get(m.id); if (!cr) return;
     if (p.ship) { // с корабля — в трюм
-      const s = shipById(p.ship); if (!s || !shipCargoAllowed(p, s) || Math.hypot(s.x - cr.x, s.z - cr.z) > SHIPS[s.type].len / 2 + 9) return say(p, 'Подплывите ближе к ящику.', 'warn');
+      const s = shipById(p.ship); if (!s || Math.hypot(s.x - cr.x, s.z - cr.z) > SHIPS[s.type].len / 2 + 9) return say(p, 'Подплывите ближе к ящику.', 'warn');
       s.crates = s.crates || []; if (s.crates.length >= crateCap(s)) return say(p, 'На корабле нет места для ящиков.', 'warn');
       s.crates.push(cr.k); G.crates.delete(cr.id); G.dirtyWorld = true; say(p, `📦 ${CRATES[cr.k].name} поднят на борт.`, 'good');
     } else {
@@ -132,12 +122,12 @@ export function crateMsg(p, m) {
       c.carry = cr.k; G.crates.delete(cr.id);
     }
   } else if (t === 'crateLoad') {
-    const s = shipById(m.sid); if (!s || !c.carry || !shipCargoAllowed(p, s)) return;
+    const s = shipById(m.sid); if (!s || !c.carry) return;
     if (dist(p, s) > SHIPS[s.type].len / 2 + 7 && p.ship !== s.id) return say(p, 'Подойдите к кораблю.', 'warn');
     s.crates = s.crates || []; if (s.crates.length >= crateCap(s)) return say(p, `В ${SHIPS[s.type].name} помещается ящиков: ${crateCap(s)}.`, 'warn');
-    s.crates.push(c.carry); c.carry = null; tradeStep(p, 3); G.dirtyWorld = true; say(p, '📦 Ящик погружен на корабль.');
+    s.crates.push(c.carry); c.carry = null; G.dirtyWorld = true; say(p, '📦 Ящик погружен на корабль.');
   } else if (t === 'crateUnload') {
-    const s = shipById(m.sid); if (!s || !shipCargoAllowed(p, s) || c.carry || !s.crates || !s.crates[m.i | 0]) return;
+    const s = shipById(m.sid); if (!s || c.carry || !s.crates || !s.crates[m.i | 0]) return;
     if (dist(p, s) > SHIPS[s.type].len / 2 + 7 && p.ship !== s.id) return say(p, 'Подойдите к кораблю.', 'warn');
     c.carry = s.crates.splice(m.i | 0, 1)[0]; G.dirtyWorld = true;
   } else if (t === 'crateSell') return sellCrate(p, m);
@@ -151,7 +141,7 @@ function sellCrate(p, m) {
   if (m.sid != null) { // из трюма корабля, стоящего у торговца
     const s = shipById(m.sid); if (!s || !s.crates || !s.crates[m.i | 0]) return;
     const lim = tr.rome ? 170 : 50; if (Math.hypot(s.x - tr.x, s.z - tr.z) > lim || Math.hypot(p.x - tr.x, p.z - tr.z) > lim) return say(p, 'Подведите корабль к причалу торговца.', 'warn');
-    if (!cargoAccess(p,s)) return say(p, 'Это чужой груз.', 'warn');
+    if (s.owner && s.owner !== c.id) return say(p, 'Это чужой груз.', 'warn');
     k = s.crates.splice(m.i | 0, 1)[0]; G.dirtyWorld = true;
   } else {
     if (!c.carry) return say(p, 'Торговец берёт только товары в ящиках — принесите ящик или подведите корабль.', 'warn');
@@ -159,7 +149,7 @@ function sellCrate(p, m) {
     k = c.carry; c.carry = null;
   }
   const price = cratePrice(p, tr, k);
-  c.den += price; c.stats2.traded += price; tradeStep(p, 4); tradeStep(p, 5);
+  c.den += price; c.stats2.traded += price;
   if (tr.rome) { G.W.romeSent = G.W.romeSent || {}; G.W.romeSent[k] = (G.W.romeSent[k] || 0) + 1; storyCheck(); G.dirtyWorld = true; }
   grantXp(p, 10 * CRATES[k].grade); grantDig(p, CRATES[k].grade);
   say(p, `⚖ ${tr.name} купил «${CRATES[k].name}» за ${price} денариев.`, 'good');
@@ -174,20 +164,19 @@ export function shipMsg(p, m) {
     const s = shipById(m.sid);
     if (s) { // ремонт на плаву — в гавани
       if (s.owner !== c.id) return;
-      const port = builtOf('portus').find((b) => dist(b, s) < 60 && dist(p,b)<40); if (!port) return say(p, 'Корабль чинят у Гавани.', 'warn');
+      const port = builtOf('portus').find((b) => dist(b, s) < 60); if (!port) return say(p, 'Корабль чинят у Гавани.', 'warn');
       const miss = s.maxHp - s.hp; if (miss <= 1) return say(p, 'Корабль цел.');
       const cost = { plank: Math.ceil(miss / 25), linen: Math.ceil(miss / 120) };
-      if (!Object.entries(cost).every(([k,n])=>(availableResources(c,port)[k]||0)>=n)) return say(p, `Нужно: доски ×${cost.plank}, лён ×${cost.linen}`, 'warn');
-      if(!payResources(c,port,cost)) return; s.hp = s.maxHp; G.dirtyWorld = true; say(p, '🔧 Корабль отремонтирован.', 'good');
+      if (!hasAll(c, cost)) return say(p, `Нужно: доски ×${cost.plank}, лён ×${cost.linen}`, 'warn');
+      payAll(c, cost); s.hp = s.maxHp; G.dirtyWorld = true; say(p, '🔧 Корабль отремонтирован.', 'good');
     } else { // поднять затонувший — заново в гавани
       const i = (c.sunk || []).findIndex((x) => x.id === m.sid); if (i < 0) return;
       const sk = c.sunk[i], def = SHIPS[sk.type];
       const port = builtOf('portus').find((b) => dist(p, b) < 40); if (!port) return say(p, 'Затонувший корабль восстанавливают на Верфи в Гавани — подойдите к ней.', 'warn');
       const cost = Object.fromEntries(Object.entries(def.cost).map(([k, n]) => [k, Math.ceil(n * 0.4)]));
-      if (!Object.entries(cost).every(([k,n])=>(availableResources(c,port)[k]||0)>=n)) return say(p, 'Нужно (40% постройки): ' + Object.entries(cost).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '), 'warn');
-      if (G.W.ships.filter(x => x.owner === c.id).length >= shipLimitOf(c)) return say(p, 'Нет места в активном флоте.', 'warn');
+      if (!hasAll(c, cost)) return say(p, 'Нужно (40% постройки): ' + Object.entries(cost).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '), 'warn');
       const b = freeBerth(sk.type, port, 200, port.id); if (!b) return say(p, 'У гавани нет свободного причала (4 места).', 'warn');
-      if(!payResources(c,port,cost)) return; c.sunk.splice(i, 1);
+      payAll(c, cost); c.sunk.splice(i, 1);
       const s2 = { id: nid(), type: sk.type, owner: c.id, ownerName: c.name, name: sk.name, x: b.x, z: b.z, ry: b.ry, berth: b.key, hp: 0, maxHp: 0, cargo: {}, speed: 0, up: sk.up || {}, crates: [] };
       s2.maxHp = shipUpMax(s2); s2.hp = s2.maxHp; G.W.ships.push(s2); G.dirtyWorld = true;
       say(p, `⚓ ${sk.name} снова на плаву!`, 'good');
@@ -195,15 +184,14 @@ export function shipMsg(p, m) {
   } else if (m.type === 'shipUp') {
     const s = shipById(m.sid), U = SHIP_UP[m.k]; if (!s || s.owner !== c.id || !U) return;
     if (m.k === 'ram' && !SHIPS[s.type].ram) return;
-    const port=builtOf('portus').find(b=>dist(b,s)<60&&dist(p,b)<40); if(!port) return say(p, 'Улучшают корабли в Гавани.', 'warn');
+    if (!builtOf('portus').some((b) => dist(b, s) < 60)) return say(p, 'Улучшают корабли в Гавани.', 'warn');
     s.up = s.up || {}; const lv = (s.up[m.k] || 0) + 1; if (lv > U.max) return;
-    const cost = U.cost(lv); if (!Object.entries(cost).every(([k,n])=>(availableResources(c,port)[k]||0)>=n)) return say(p, 'Нужно: ' + Object.entries(cost).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '), 'warn');
-    if(!payResources(c,port,cost)) return; s.up[m.k] = lv; const old = s.maxHp; s.maxHp = shipUpMax(s); s.hp += s.maxHp - old; G.dirtyWorld = true;
+    const cost = U.cost(lv); if (!hasAll(c, cost)) return say(p, 'Нужно: ' + Object.entries(cost).map(([k, n]) => `${D.RES[k].name} ×${n}`).join(', '), 'warn');
+    payAll(c, cost); s.up[m.k] = lv; const old = s.maxHp; s.maxHp = shipUpMax(s); s.hp += s.maxHp - old; G.dirtyWorld = true;
     say(p, `🔨 ${s.name}: ${U.name} — ступень ${lv}.`, 'good');
   } else if (m.type === 'shipArcher') {
     const s = shipById(m.sid), sl = G.W.slaves.find((x) => x.id === m.slave); if (!s || !sl || s.owner !== c.id || sl.owner !== c.id) return;
     if (m.on) {
-      if (sl.squad) return say(p, 'Сначала распустите отряд работника.', 'warn');
       const n = G.W.slaves.filter((x) => x.ship === s.id).length; if (n >= SHIPS[s.type].archers) return say(p, `Мест для лучников: ${SHIPS[s.type].archers}.`, 'warn');
       sl.ship = s.id; sl.bld = null; sl.ludus = null; say(p, `🏹 ${sl.name} — лучник на «${s.name}».`, 'good');
     } else { sl.ship = null; }
@@ -236,16 +224,16 @@ function catapult(p, m) {
 let pirateCheckAt = 0;
 function pirateTick(t) {
   if (t < pirateCheckAt) return; pirateCheckAt = t + 60;
-  if ([...G.eships.values()].filter(s=>s.type==='pirate_ship').length>=10||(G.W.pirateCalm || 0) > Date.now() / 1000) return; // логово разгромлено — пиратов нет
+  if ((G.W.pirateCalm || 0) > Date.now() / 1000) return; // логово разгромлено — пиратов нет
   for (const s of G.W.ships) {
-    if (!s.crates || !s.crates.length || s.berth || (s.pirateAt || 0) > t) continue;
+    if (inHarborZone(s.x, s.z) || !s.crates || !s.crates.length || s.berth || (s.pirateAt || 0) > t) continue;
     if (WG.islandAt(s.x, s.z)?.id === 'main' && WG.terrainHeight(s.x, s.z) > -8) continue; // у берега главного острова спокойно
     if ([...G.eships.values()].some((e) => e.type === 'pirate_ship' && e.prey === s.id)) continue;
     if (Math.random() > 0.18 + s.crates.length * 0.04) continue;
     const a = rand(0, 6.28); let x = s.x + Math.cos(a) * 230, z = s.z + Math.sin(a) * 230;
     if (!WG.shipOk(x, z)) continue;
-    if([...G.eships.values()].filter(s=>s.type==='pirate_ship').length>=10)break;
-    const e = spawnEnemyShip('pirate_ship', x, z, { mode: 'hunt', lvl: encounterLevel(1), life: 900 });
+    const e = spawnEnemyShip('pirate_ship', x, z, { mode: 'hunt', lvl: 3 + G.W.day, life: 900 });
+    if (!e) continue;
     e.prey = s.id; e.loot = randi(1, 3); s.pirateAt = t + 420;
     for (const q of riders(s)) say(q, '🏴 На горизонте пираты — они идут за вашим грузом! Тараньте, стреляйте или берите на абордаж.', 'bad');
     log(`🏴 Пиратский корабль погнался за «${s.name}» с грузом!`, 'bad');
@@ -257,7 +245,7 @@ function boardingTick(t, dt) {
     if (e.crew == null) e.crew = crewMax(e);
     // пираты цепляются к кораблю с грузом и идут на абордаж
     const prey = e.prey && shipById(e.prey);
-    if (prey) {
+    if (prey && !(e.type === 'pirate_ship' && (inHarborZone(prey.x, prey.z) || inHarborZone(e.x, e.z)))) {
       const d = Math.hypot(prey.x - e.x, prey.z - e.z);
       if (d < (SHIPS[prey.type].len + ENEMY_SHIPS[e.type].len) / 2 + 3) {
         e.grapple = (e.grapple || 0) + dt;
@@ -287,6 +275,7 @@ export function boardStart(p) {
   if (e.hp > e.maxHp * 0.5) return say(p, `Абордаж возможен, когда у врага меньше половины прочности (сейчас ${Math.round(e.hp / e.maxHp * 100)}%). Тараньте и обстреливайте его.`, 'warn');
   const B1 = BEAM[s.type] || 3, B2 = EBEAM[e.type] || 4, gap = 3.6, L2 = ENEMY_SHIPS[e.type].len;
   const cx = Math.cos(s.ry), sz = -Math.sin(s.ry), side = ((e.x - s.x) * cx + (e.z - s.z) * sz) >= 0 ? 1 : -1, off = B1 / 2 + B2 / 2 + gap;
+  if (e.type === 'pirate_ship' && inHarborZone(s.x + cx * off * side, s.z + sz * off * side, L2 / 2 + 4)) return say(p, 'В защитной зоне гавани пираты не сближаются. Для абордажа выйдите в открытое море.', 'warn');
   e.x = s.x + cx * off * side; e.z = s.z + sz * off * side; e.ry = s.ry; e.speed = 0;
   const y1 = DECK_Y[s.type] || 1.4, y2 = DECK_Y[e.type] || 1.6, id = nid();
   const decks = [{ x: s.x, z: s.z, ry: s.ry, hw: B1 / 2, hl: L1 * 0.42, y: y1 }, { x: e.x, z: e.z, ry: s.ry, hw: B2 / 2, hl: L2 * 0.42, y: y2 },

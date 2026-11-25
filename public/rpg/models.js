@@ -3,7 +3,7 @@
 // Соглашения: начало координат модели — центр на уровне земли, +Z — «вперёд» (лицо персонажа, нос корабля).
 // Простые матовые материалы берутся через M(color) (roughness 0.9, metalness 0) — клиент склеивает их в цвета вершин.
 import * as THREE from 'three';
-import { VLight, VLIGHTS, LABEL_LAYER, makeLabel, makeCloud, M, mesh } from '../models.js';
+import { VLight, VLIGHTS, LABEL_LAYER, makeLabel, makeCloud, M, mesh } from './model_utils.js';
 export { VLight, VLIGHTS, LABEL_LAYER, makeLabel, makeCloud, M, mesh };
 
 // ======================================================================
@@ -743,7 +743,6 @@ function buildWeapon(key, q = 0) {
       if (gold) P(h, box(0.02, 0.06, 0.05), goldM(), 0.03, 0, 0);
       break;
     }
-    case 'lance': {const spear=buildWeapon('hasta',q);spear.scale.y=1.65;g.add(spear);break;}
     case 'hasta': {
       P(g, cyl(0.017, 0.019, 2.25, 8), M(C.woodL), 0, 0.42, 0);
       const hd = grp(g, 0, 1.6, 0, 0, HPI, 0);
@@ -1435,12 +1434,11 @@ export function animateHuman(h, dt, s = {}) {
   // ---------- что в руках ----------
   if (wk && wk !== 'bow' && wk !== 'torch' && wk !== 'sling') { aR[0] = aR[0] * 0.5 - 0.22; eR = Math.min(eR, -0.65); }
   if (wk === 'torch') { aR[0] = aR[0] * 0.3 - 0.45; aR[2] = -0.12; eR = -1.1; wR[0] = -0.8; }
-  if (wk === 'lance' || wk === 'hasta' || wk === 'trident' || wk === 'pilum') { wR[0] = -0.9; }
+  if (wk === 'hasta' || wk === 'trident' || wk === 'pilum') { wR[0] = -0.9; }
   if (wk && wk.startsWith('rod')) { wR[0] = -1.4; }
   if (wk === 'bow') { aL[0] = aL[0] * 0.4 - 0.15; aL[2] = 0.18; eL = -0.7; }
   if (u._torchL) { aL[0] = aL[0] * 0.3 - 0.45; aL[2] = 0.12; eL = -1.1; wL[0] = -0.8; }
   if (hasShield) { aL[0] = aL[0] * 0.25 - 0.15; aL[2] = 0.2; eL = -1.38; }
-  if(wk==='lance'&&s.ride&&(s.lanceSpeed||s.speed)>3){ikR={t:[-.3,.24,.35],p:[-1,-.4,-.2]};ikRw=1;wdR=[0,-.08,1];}
   // ---------- переноска ----------
   if (A.carry > 0.01) {
     const w = A.carry; ikR = { t: [-0.17, 0.2, 0.36], p: [-1, -0.8, -0.3] }; ikL = { t: [0.17, 0.2, 0.36], p: [1, -0.8, -0.3] }; ikRw = ikLw = w;
@@ -1653,7 +1651,6 @@ export function animateHuman(h, dt, s = {}) {
     h.getWorldQuaternion(_q2); u.torchFlame.quaternion.copy(_q1.multiply(_q2));
   }
   const w = u.gear.weapon;
-  if(w)w.visible=!(wk==='pilum'&&s.attack?.kind==='throw'&&s.attack.p>=.55);
   if (w) w.traverse((c) => {
     if (c.userData.hang) {
       c.parent.updateWorldMatrix(true, false);
@@ -2822,7 +2819,6 @@ BUILD.amphitheatrum = (g) => {
   g.userData.arena = { a: aI, b: bI, gates: [[aI + pw, 0], [-(aI + pw), 0]] };
 };
 // ---------- Римская дорога: участок 4×8 м ----------
-BUILD.via_cell=(g)=>{ P(g,box(4,.12,4),M(0x77736b),0,.03,0);for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++)P(g,box(1.23,.03,1.23),M((i+j)%2?0x969081:0xaaa38e),i*1.31,.11,j*1.31); };
 BUILD.via = (g) => {
   const r = rng(7);
   P(g, tbox(4.3, 1.0, 8.02), M(0x8a7a60), 0, -0.42, 0);          // насыпь уходит в землю
@@ -3520,12 +3516,10 @@ BUILD.vivarium = (g) => {
 };
 
 export function makeBuilding(type, opts = {}) {
-  type = ({ warehouse: 'horreum_s', supply_depot: 'horreum_s', quarters: 'domus' })[type] || type;
   const g = B(type);
   const fn = BUILD[type];
   if (fn) fn(g, opts);
   else { plinth(g, 0, 0, 4, 4, 0.3); wall(g, 0, 0.3, 0, 3.6, 3, 3.6); gable(g, 0, 3.3, 0, 3.6, 3.6); colB(g, 0, 0, 4, 4); }
-  if(type==='amphitheatrum'){g.scale.set(1.35,1,1.35);for(const c of g.userData.colliders||[]){c.x*=1.35;c.z*=1.35;if(c.r)c.r*=1.35;if(c.w)c.w*=1.35;if(c.d)c.d*=1.35;}}
   return g;
 }
 
@@ -3790,8 +3784,7 @@ export function makeShip(type) {
     P(rock, rbox(2.0, 0.22, 3.4, 0.03), PLANK(), 0, c.deckY + 0.1, cz);
     ({ cg: catapult, arm: catapultArm } = onager(rock, 0, c.deckY + 0.21, cz));
   }
-  const oarBatches=batchOars(rock,oars);
-  g.userData = { oarBatches, oars, sail, seats, hull, rock, type, len: c.L, deckY: c.deckY, catapult, catapultArm, catapultRest: ONAGER_REST, catapultFired: ONAGER_FIRED };
+  g.userData = { oars, sail, seats, hull, rock, type, len: c.L, deckY: c.deckY, catapult, catapultArm, catapultRest: ONAGER_REST, catapultFired: ONAGER_FIRED };
   return g;
 }
 const ONAGER_REST = -1.35, ONAGER_FIRED = 0.17;
@@ -3821,22 +3814,6 @@ function onager(par, x, y, z) {
   cg.userData.arm = arm;
   return { cg, arm };
 }
-// Oars share geometry/materials. Keep their original pivots for animation but submit
-// one instanced draw per geometry instead of one draw for each shaft and blade.
-const oarMatrix=new THREE.Matrix4(),oarPivot=new THREE.Matrix4();
-function batchOars(rock,oars){
- const groups=new Map();
- for(const oar of oars){const tilt=oar.userData.tilt;for(const part of [...tilt.children]){
-  if(!part.isMesh)continue;part.updateMatrix();const key=part.geometry.uuid+'/'+part.material.uuid;
-  let b=groups.get(key);if(!b){b={geometry:part.geometry,material:part.material,items:[]};groups.set(key,b);}
-  b.items.push({oar,tilt,local:part.matrix.clone()});tilt.remove(part);
- }}
- const batches=[...groups.values()];for(const b of batches){b.mesh=new THREE.InstancedMesh(b.geometry,b.material,b.items.length);b.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);b.mesh.castShadow=true;b.mesh.receiveShadow=true;b.mesh.frustumCulled=false;b.mesh.name='oarBatch';rock.add(b.mesh);}
- updateOarBatches(batches);return batches;
-}
-function updateOarBatches(batches){
- for(const b of batches||[]){for(let i=0;i<b.items.length;i++){const {oar,tilt,local}=b.items[i];oar.updateMatrix();tilt.updateMatrix();oarPivot.multiplyMatrices(oar.matrix,tilt.matrix);oarMatrix.multiplyMatrices(oarPivot,local);b.mesh.setMatrixAt(i,oarMatrix);}b.mesh.instanceMatrix.needsUpdate=true;}
-}
 export function animateShip(sh, t, speed = 0) {
   const u = sh.userData; if (!u.rock) return;
   const rowing = Math.abs(speed) > 0.3;
@@ -3851,7 +3828,6 @@ export function animateShip(sh, t, speed = 0) {
       o.userData.tilt.rotation.z = o.userData.base + s * -lift;
     } else { o.rotation.y = lerp(o.rotation.y, s * 0.15, 0.05); o.userData.tilt.rotation.z = lerp(o.userData.tilt.rotation.z, o.userData.base + s * 0.25, 0.05); }
   }
-  updateOarBatches(u.oarBatches);
   if (u.sail) { u.sail.scale.z = 0.8 + 0.25 * Math.sin(t * 1.3) + 0.15 * Math.sin(t * 3.1) + 0.3 * k; u.sail.rotation.x = 0.02 * Math.sin(t * 2.2); }
   const sc = 1 / Math.sqrt(u.len / 10);
   u.rock.rotation.z = Math.sin(t * 0.8) * 0.035 * sc;
@@ -4349,7 +4325,7 @@ export function animateFishSchool(g, t) {
 // Предметы на земле
 // ======================================================================
 const GEAR_SLOT = {
-  weapon: ['lance', 'knife', 'gladius', 'spatha', 'axe', 'hasta', 'bow', 'khopesh', 'falcata', 'rudis', 'pick', 'rod', 'rod_pro', 'torch', 'pilum', 'falx', 'sling', 'trident', 'sica'],
+  weapon: ['knife', 'gladius', 'spatha', 'axe', 'hasta', 'bow', 'khopesh', 'falcata', 'rudis', 'pick', 'rod', 'rod_pro', 'torch', 'pilum', 'falx', 'sling', 'trident', 'sica'],
   offhand: ['parma', 'scutum', 'barbshield', 'punicshield', 'caetra'],
   head: ['pileus', 'galea_bronze', 'galea_iron', 'galea_centurio', 'horns', 'punichelm', 'punichelm_gold', 'nemes', 'murmillo', 'thraex'],
   body: ['subarmalis', 'hamata', 'squamata', 'segmentata', 'croc_armor', 'punic_mail', 'fur', 'chief', 'pirate', 'punic', 'punic_gold', 'tunic_punic', 'iberian', 'robber', 'robber_boss', 'glad'],
@@ -5246,3 +5222,5 @@ export function makeDungeonCorridor(theme = 'cave', len = 10) {
 
 // ---------- Помощники для дополнительных модулей моделей (models_city.js, models_eco.js) ----------
 export const H = { THREE, PI, TAU, HPI, clamp, lerp, ease, seg, fract, rng, hash3, G, box, cyl, sph, hemi, cone, tor, ico, oct, dod, lathe, rbox, extr, tube, lumpy, wuv, tbox, tcyl, bendX, paint, P, grp, noShadow, MET, FLAME, EMB, bronzeM, ironM, steelM, goldM, canvasTex, shade, T, TM, ASH, TILE, PLANK, BRICK, THATCH, FOL, amphora, dolium, crate, sack, barrel, logPile, plankStack, brickStack, stoneBlocks, brazier, bench, table, cart, banner, column, stairs, statue, rope, darker, B, colB, colC, WATER, plinth, plinthC, wall, door, win, gable, shed, fence, post, palus, paving4, hut, tent, campfire, weaponRack, statera, lowWarehouse, basin, cropRows, colRow, onager, punicTower, punicWallSeg, seaRock, C, M, VLight, BUILD, POI, SHIPDEF, makeLabel };
+
+export { makeTrainingTarget } from './training-model.js';
